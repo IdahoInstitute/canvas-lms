@@ -2,20 +2,23 @@ var React = require('react');
 var div = React.DOM.div;
 var focusManager = require('../helpers/focusManager');
 var scopeTab = require('../helpers/scopeTab');
+var cx = require('react/lib/cx');
 
 // so that our CSS is statically analyzable
 var CLASS_NAMES = {
   overlay: {
     base: 'ReactModal__Overlay',
     afterOpen: 'ReactModal__Overlay--after-open',
-    beforeClose: 'ReactModal__Overlay--before-close',
+    beforeClose: 'ReactModal__Overlay--before-close'
   },
   content: {
     base: 'ReactModal__Content',
     afterOpen: 'ReactModal__Content--after-open',
-    beforeClose: 'ReactModal__Content--before-close',
+    beforeClose: 'ReactModal__Content--before-close'
   }
 };
+
+var OVERLAY_STYLES = { position: 'fixed', left: 0, right: 0, top: 0, bottom: 0 };
 
 function stopPropagation(event) {
   event.stopPropagation();
@@ -33,19 +36,32 @@ var ModalPortal = module.exports = React.createClass({
   },
 
   componentDidMount: function() {
-    this.handleProps(this.props);
-    this.maybeFocus();
+    // Focus needs to be set when mounting and already open
+    if (this.props.isOpen) {
+      this.setFocusAfterRender(true);
+      this.open();
+    }
   },
 
   componentWillReceiveProps: function(newProps) {
-    this.handleProps(newProps);
+    // Focus only needs to be set once when the modal is being opened
+    if (!this.props.isOpen && newProps.isOpen) {
+      this.setFocusAfterRender(true);
+      this.open();
+    } else if (this.props.isOpen && !newProps.isOpen) {
+      this.close();
+    }
   },
 
-  handleProps: function(props) {
-    if (props.isOpen === true)
-      this.open();
-    else if (props.isOpen === false)
-      this.close();
+  componentDidUpdate: function () {
+    if (this.focusAfterRender) {
+      this.focusContent();
+      this.setFocusAfterRender(false);
+    }
+  },
+
+  setFocusAfterRender: function (focus) {
+    this.focusAfterRender = focus;
   },
 
   open: function() {
@@ -63,15 +79,6 @@ var ModalPortal = module.exports = React.createClass({
       this.closeWithTimeout();
     else
       this.closeWithoutTimeout();
-  },
-
-  componentDidUpdate: function() {
-    this.maybeFocus();
-  },
-
-  maybeFocus: function() {
-    if (this.props.isOpen)
-      this.focusContent();
   },
 
   focusContent: function() {
@@ -97,8 +104,8 @@ var ModalPortal = module.exports = React.createClass({
   },
 
   handleKeyDown: function(event) {
-    if (event.key == 9 /*tab*/) scopeTab(this.getDOMNode(), event);
-    if (event.key == 27 /*esc*/) this.requestClose();
+    if (event.keyCode == 9 /*tab*/) scopeTab(this.refs.content.getDOMNode(), event);
+    if (event.keyCode == 27 /*esc*/) this.requestClose();
   },
 
   handleOverlayClick: function() {
@@ -109,7 +116,7 @@ var ModalPortal = module.exports = React.createClass({
   },
 
   requestClose: function() {
-    if (this.ownerHandlesClose)
+    if (this.ownerHandlesClose())
       this.props.onRequestClose();
   },
 
@@ -120,8 +127,6 @@ var ModalPortal = module.exports = React.createClass({
   shouldBeClosed: function() {
     return !this.props.isOpen && !this.state.beforeClose;
   },
-
-  overlayStyles: { position: 'fixed', left: 0, right: 0, top: 0, bottom: 0 },
 
   buildClassName: function(which) {
     var className = CLASS_NAMES[which].base;
@@ -135,13 +140,14 @@ var ModalPortal = module.exports = React.createClass({
   render: function() {
     return this.shouldBeClosed() ? div() : (
       div({
-        className: this.buildClassName('overlay'),
-        style: this.overlayStyles,
+        ref: "overlay",
+        className: cx(this.buildClassName('overlay'), this.props.overlayClassName),
+        style: OVERLAY_STYLES,
         onClick: this.handleOverlayClick
       },
         div({
           ref: "content",
-          className: this.buildClassName('content'),
+          className: cx(this.buildClassName('content'), this.props.className),
           tabIndex: "-1",
           onClick: stopPropagation,
           onKeyDown: this.handleKeyDown
@@ -152,4 +158,3 @@ var ModalPortal = module.exports = React.createClass({
     );
   }
 });
-

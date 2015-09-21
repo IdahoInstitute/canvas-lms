@@ -1,9 +1,10 @@
-<% content_for :page_title do %><%= join_title t(:page_title, "Gradebook"), @context.name %><% end %>
-
 <%
-  jammit_css :gradebook_uploads
+  content_for :page_title, join_title(t(:page_title, "Gradebook"), @context.name)
+  css_bundle :slickgrid, :gradebook_uploads
   js_bundle :gradebook_uploads
 %>
+
+<div id="spinner" style="height:250px"></div>
 
 <form id="gradebook_importer_resolution_section" style="display:none;">
   <h3><%= t('headers.import_error', "There was some stuff I couldn't figure out with the data that you uploaded:") %></h3>
@@ -70,7 +71,13 @@
 </div>
 
 <%= form_tag({}, {:method => "put", :id => "gradebook_grid_form", :style => "display:none;"}) do %>
-  <div id="gradebook_grid"></div>
+  <div id="gradebook_uploader_container">
+    <div id="grid">
+      <div id="gradebook_grid_header"></div>
+      <div id="gradebook_grid"></div>
+    </div>
+  </div>
+
   <input type="hidden" name="json_data_to_submit" value="" />
   <div class="button-container" style="padding-left:7px;">
     <button type="submit" class="btn"><%= t('buttons.save_changes', "Save Changes") %></button>
@@ -78,12 +85,11 @@
     <span id="assignments_without_changes_alert" style="display:none; margin-left: 50px;"><%= t('notices.unchanged', "Note: You uploaded some assignments that had no grade changes detected. They have been hidden.") %></span>
   </div>
 <% end -%>
+
+<div id="assignments_outside_current_periods" class="hidden">
+  <h4><%= t('headers.past_grading_periods_prevent_editing', "The following assignments cannot be edited because they are not in a current grading period:") %></h4>
+</div>
+
 <style>
   /*keep this here because jquery.rule needs it to stick in dynamic styles for the slick.grid to keep all of the columns the same width*/
 </style>
-
-<% js_block do %>
-  <script type="text/javascript">
-    window.uploadedGradebook = <%= raw @uploaded_gradebook.to_json %>
-  </script>
-<% end %>

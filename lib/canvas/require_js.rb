@@ -32,7 +32,7 @@ module Canvas
             end
             hash
           }
-    
+
         # inject any bundle extensions defined in plugins
         extensions_for("*").each do |bundle, extensions|
           if app_bundles["compiled/bundles/#{bundle}"]
@@ -60,8 +60,7 @@ module Canvas
       def paths(cache_busting = false)
         @paths ||= {
           :common => 'compiled/bundles/common',
-          :jqueryui => 'vendor/jqueryui',
-          :uploadify => '../flash/uploadify/jquery.uploadify-3.1.min',
+          :jqueryui => 'vendor/jqueryui'
         }.update(cache_busting ? cache_busting_paths : {}).
           update(plugin_paths).
           update(Canvas::RequireJs::PluginExtension.paths).
@@ -72,6 +71,10 @@ module Canvas
 
       def map
         @map ||= Canvas::RequireJs::ClientAppExtension.map.to_json
+      end
+
+      def bundles
+        @bundles ||= Canvas::RequireJs::ClientAppExtension.bundles.to_json
       end
 
       def packages
@@ -101,13 +104,25 @@ module Canvas
       def cache_busting_paths
         { 'compiled/tinymce' => 'compiled/tinymce.js?v2' } # hack: increment to purge browser cached bundles after tiny change
       end
-      
+
       def shims
         <<-JS.gsub(%r{\A +|^ {8}}, '')
           {
             'bower/react-router/dist/react-router': {
               deps: ['react'],
               exports: 'ReactRouter'
+            },
+            'bower/react-tray/dist/react-tray': {
+              deps: ['react']
+            },
+            'bower/react-modal/dist/react-modal': {
+              deps: ['react']
+            },
+            'bower/react-tokeninput/dist/react-tokeninput': {
+              deps: ['react'],
+            },
+            'bower/react-select-box/dist/react-select-box': {
+              deps: ['react'],
             },
             'bower/ember/ember': {
               deps: ['jquery', 'handlebars'],
@@ -124,10 +139,6 @@ module Canvas
               deps: ['jquery', 'vendor/FileAPI/config'],
               exports: 'FileAPI'
             },
-            'uploadify': {
-              deps: ['jquery'],
-              exports: '$'
-            },
             'vendor/bootstrap-select/bootstrap-select' : {
               deps: ['jquery'],
               exports: '$'
@@ -136,9 +147,30 @@ module Canvas
               deps: ['jquery'],
               exports: '$'
             },
+            'vendor/jquery.smartbanner': {
+              deps: ['jquery'],
+              exports: '$'
+            },
             'handlebars': {
               deps: ['bower/handlebars/handlebars.runtime.amd'],
               exports: 'Handlebars'
+            },
+            'vendor/i18n': {
+              exports: 'I18n'
+            },
+            'vendor/react-infinite-scroll.min' : {
+              deps: ['react'],
+              exports: 'InfiniteScroll'
+            },
+            'bower/tinymce/tinymce' : {
+              exports: 'tinymce'
+            },
+            'bower/axios/dist/axios' : {
+              exports: 'axios'
+            },
+            'bower/tinymce/themes/modern/theme' : {
+              deps: ['bower/tinymce/tinymce'],
+              exports: 'tinymce'
             }
           }
         JS

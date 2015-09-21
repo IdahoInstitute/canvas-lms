@@ -25,21 +25,28 @@ class SubmissionComment < ActiveRecord::Base
   belongs_to :recipient, :class_name => 'User'
   belongs_to :assessment_request
   belongs_to :context, :polymorphic => true
+  belongs_to :provisional_grade, :class_name => 'ModeratedGrading::ProvisionalGrade'
   validates_inclusion_of :context_type, :allow_nil => true, :in => ['Course']
   has_many :associated_attachments, :class_name => 'Attachment', :as => :context
   has_many :submission_comment_participants, :dependent => :destroy
   has_many :messages, :as => :context, :dependent => :destroy
 
   EXPORTABLE_ATTRIBUTES = [
-    :id, :comment, :submission_id, :recipient_id, :author_id, :author_name, :group_comment_id, :created_at, :updated_at, :attachment_ids, :assessment_request_id, :media_comment_id,
-    :media_comment_type, :context_id, :context_type, :cached_attachments, :anonymous, :teacher_only_comment, :hidden
-  ]
-  EXPORTABLE_ASSOCIATIONS = [:submission, :author, :recipient, :assessment_request, :context, :associated_attachments, :submission_comment_participants]
+    :id, :comment, :submission_id, :recipient_id, :author_id, :author_name, :group_comment_id, :created_at,
+    :updated_at, :attachment_ids, :assessment_request_id, :media_comment_id, :media_comment_type, :context_id,
+    :context_type, :cached_attachments, :anonymous, :teacher_only_comment, :hidden
+  ].freeze
+  EXPORTABLE_ASSOCIATIONS = [
+    :submission, :author, :recipient, :assessment_request, :context, :associated_attachments,
+    :submission_comment_participants
+  ].freeze
 
   validates_length_of :comment, :maximum => maximum_text_length, :allow_nil => true, :allow_blank => true
   validates_length_of :comment, :minimum => 1, :allow_nil => true, :allow_blank => true
 
-  attr_accessible :comment, :submission, :submission_id, :recipient, :recipient_id, :author, :context_id, :context_type, :media_comment_id, :media_comment_type, :group_comment_id, :assessment_request, :attachments, :anonymous, :hidden
+  attr_accessible :comment, :submission, :submission_id, :recipient, :recipient_id, :author, :context_id,
+                  :context_type, :media_comment_id, :media_comment_type, :group_comment_id, :assessment_request,
+                  :attachments, :anonymous, :hidden, :provisional_grade_id
 
   before_save :infer_details
   after_save :update_submission
@@ -80,7 +87,7 @@ class SubmissionComment < ActiveRecord::Base
   end
 
   on_create_send_to_streams do
-    if self.submission
+    if self.submission && self.provisional_grade_id.nil?
       if self.author_id == self.submission.user_id
         self.submission.context.instructors_in_charge_of(self.author_id)
       else
@@ -99,6 +106,14 @@ class SubmissionComment < ActiveRecord::Base
 
     given {|user, session| self.submission.grants_right?(user, session, :grade) }
     can :read and can :delete
+
+    given { |user, session|
+      !self.anonymous? ||
+        self.author == user ||
+        self.submission.assignment.context.grants_right?(user, session, :view_all_grades) ||
+        self.submission.assignment.context.grants_right?(self.author, session, :view_all_grades)
+    }
+    can :read_author
   end
 
   set_broadcast_policy do |p|
@@ -106,7 +121,9 @@ class SubmissionComment < ActiveRecord::Base
     p.to { [submission.user] - [author] }
     p.whenever {|record|
       record.just_created &&
+      record.provisional_grade_id.nil? &&
       record.submission.assignment &&
+      record.submission.assignment.context.available? &&
       !record.submission.assignment.muted? &&
       (!record.submission.assignment.context.instructors.include?(author) || record.submission.assignment.published?)
     }
@@ -115,6 +132,7 @@ class SubmissionComment < ActiveRecord::Base
     p.to { submission.assignment.context.instructors_in_charge_of(author_id) - [author] }
     p.whenever {|record|
       record.just_created &&
+      record.provisional_grade_id.nil? &&
       record.submission.user_id == record.author_id
     }
   end
@@ -143,7 +161,8 @@ class SubmissionComment < ActiveRecord::Base
         :recipient_id => self.recipient_id,
         :author => user,
         :context_id => self.context_id,
-        :context_type => self.context_type
+        :context_type => self.context_type,
+        :provisional_grade_id => self.provisional_grade_id
       })
     end
   end
@@ -171,6 +190,7 @@ class SubmissionComment < ActiveRecord::Base
   end
 
   def infer_details
+    self.anonymous = self.submission.assignment.anonymous_peer_reviews
     self.author_name ||= self.author.short_name rescue t(:unknown_author, "Someone")
     self.cached_attachments = self.attachments.map{|a| OpenObject.build('attachment', a.attributes) }
     self.context = self.read_attribute(:context) || self.submission.assignment.context rescue nil
@@ -181,7 +201,6 @@ class SubmissionComment < ActiveRecord::Base
     self.save
   end
 
-
   def attachments
     ids = Set.new((attachment_ids || "").split(",").map { |id| id.to_i})
     attachments = associated_attachments
@@ -190,14 +209,15 @@ class SubmissionComment < ActiveRecord::Base
   end
 
   def self.preload_attachments(comments)
-    SubmissionComment.send :preload_associations, comments, [:associated_attachments, :submission]
+    ActiveRecord::Associations::Preloader.new(comments, [:associated_attachments, :submission]).run
     submissions = comments.map(&:submission).uniq
-    Submission.send :preload_associations, submissions, :assignment => :attachments
+    ActiveRecord::Associations::Preloader.new(submissions, :assignment => :attachments).run
   end
 
   def update_submission
-    return nil if hidden?
-    comments_count = SubmissionComment.where(:submission_id => submission_id, :hidden => false).count
+    return nil if hidden? || provisional_grade_id.present?
+    comments_count = SubmissionComment.where(:submission_id => submission_id, :hidden => false,
+                                             :provisional_grade_id => provisional_grade_id).count
     Submission.where(:id => submission_id).update_all(:submission_comments_count => comments_count) rescue nil
   end
 
@@ -214,7 +234,7 @@ class SubmissionComment < ActiveRecord::Base
   def context_code
     "#{self.context_type.downcase}_#{self.context_id}"
   end
-  
+
   def avatar_path
     "/images/users/#{User.avatar_key(self.author_id)}"
   end
@@ -226,7 +246,9 @@ class SubmissionComment < ActiveRecord::Base
   scope :visible, -> { where(:hidden => false) }
 
   scope :after, lambda { |date| where("submission_comments.created_at>?", date) }
-  scope :for_context, lambda { |context| where(:context_id => context, :context_type => context.class.to_s) }
+
+  scope :for_final_grade, -> { where(:provisional_grade_id => nil) }
+  scope :for_provisional_grade, ->(id) { where(:provisional_grade_id => id) }
 
   def update_participation
     # id_changed? because new_record? is false in after_save callbacks

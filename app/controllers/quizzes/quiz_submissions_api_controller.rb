@@ -130,6 +130,11 @@
 #           "description": "The current state of the quiz submission. Possible values: ['untaken'|'pending_review'|'complete'|'settings_only'|'preview'].",
 #           "example": "untaken",
 #           "type": "string"
+#         },
+#         "overdue_and_needs_submission": {
+#           "description": "Indicates whether the quiz submission is overdue and needs submission",
+#           "example": "false",
+#           "type": "boolean"
 #         }
 #       }
 #     }
@@ -160,20 +165,32 @@ class Quizzes::QuizSubmissionsApiController < ApplicationController
   #    "quiz_submissions": [QuizSubmission]
   #  }
   def index
-    quiz_submissions = if is_authorized_action?(@context, @current_user, [:manage_grades, :view_all_grades])
+    quiz_submissions = if @context.grants_any_right?(@current_user, session, :manage_grades, :view_all_grades)
       # teachers have access to all student submissions
       Api.paginate @quiz.quiz_submissions.where(:user_id => visible_user_ids),
         self,
         api_v1_course_quiz_submissions_url(@context, @quiz)
-    elsif is_authorized_action?(@quiz, @current_user, :submit)
-      # students have access only to their own
-      @quiz.quiz_submissions.where(:user_id => @current_user)
+    elsif @quiz.grants_right?(@current_user, session, :submit)
+      # students have access only to their own submissions, both in progress, or completed`
+      submission = @quiz.quiz_submissions.where(:user_id => @current_user).first
+      if submission
+        if submission.workflow_state == "untaken"
+          [submission]
+        else
+          submission.submitted_attempts
+        end
+      else
+        []
+      end
     end
 
-    if !quiz_submissions
-      render_unauthorized_action
-    else
+    if quiz_submissions
+      # trigger delayed grading job for all submission id's which needs grading
+      quiz_submissions_ids = quiz_submissions.map(&:id).uniq
+      Quizzes::OutstandingQuizSubmissionManager.new(@quiz).send_later_if_production(:grade_by_ids, quiz_submissions_ids)
       serialize_and_render quiz_submissions
+    else
+      render_unauthorized_action
     end
   end
 
@@ -193,6 +210,10 @@ class Quizzes::QuizSubmissionsApiController < ApplicationController
   #  }
   def show
     if authorized_action(@quiz_submission, @current_user, :read)
+      if params.has_key?(:attempt)
+        retrieve_quiz_submission_attempt!(params[:attempt])
+      end
+
       serialize_and_render @quiz_submission
     end
   end
@@ -341,8 +362,37 @@ class Quizzes::QuizSubmissionsApiController < ApplicationController
   def complete
     @service.complete @quiz_submission, params[:attempt]
 
+    # TODO: should this go in the service instead?
+    Canvas::LiveEvents.quiz_submitted(@quiz_submission)
+
     serialize_and_render @quiz_submission
   end
+
+  # @API Get current quiz submission times.
+  # @beta
+  #
+  # Get the current timing data for the quiz attempt, both the end_at timestamp
+  # and the time_left parameter.
+  #
+  # <b>Responses</b>
+  #
+  # * <b>200 OK</b> if the request was successful
+  #
+  # @example_response
+  #  {
+  #    "end_at": [DateTime],
+  #    "time_left": [Integer]
+  #  }
+  def time
+    if authorized_action(@quiz_submission, @current_user, :record_events)
+      render :json =>
+      {
+        :end_at => @quiz_submission && @quiz_submission.end_at,
+        :time_left => @quiz_submission && @quiz_submission.time_left
+      }
+    end
+  end
+
 
   private
 

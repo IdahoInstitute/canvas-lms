@@ -31,8 +31,8 @@
 #           "type": "string"
 #         },
 #         "supplied_batches": {
-#           "description": "Which file were included in the SIS import",
-#           "example": "[\"term\", \"course\", \"section\", \"user\", \"enrollment\"]",
+#           "description": "Which files were included in the SIS import",
+#           "example": ["term", "course", "section", "user", "enrollment"],
 #           "type": "array",
 #           "items": { "type": "string" }
 #         },
@@ -148,7 +148,7 @@
 #           "example": "[['students.csv','user John Doe has already claimed john_doe's requested login information, skipping'], ...]",
 #           "type": "array",
 #           "items": {
-#             "$ref": "Array"
+#             "type": "string"
 #           }
 #         },
 #         "processing_errors": {
@@ -156,7 +156,7 @@
 #           "example": "[['students.csv','Error while importing CSV. Please contact support.'], ...]",
 #           "type": "array",
 #           "items": {
-#             "$ref": "Array"
+#             "type": "string"
 #           }
 #         },
 #         "batch_mode": {
@@ -183,6 +183,16 @@
 #           "description": "Whether stickiness was cleared.",
 #           "example": "false",
 #           "type": "boolean"
+#         },
+#         "diffing_data_set_identifier": {
+#           "description": "The identifier of the data set that this SIS batch diffs against",
+#           "example": "account-5-enrollments",
+#           "type": "string"
+#         },
+#         "diffed_against_import_id": {
+#           "description": "The ID of the SIS Import that this import was diffed against",
+#           "example": 1,
+#           "type": "integer"
 #         }
 #       }
 #     }
@@ -192,22 +202,29 @@ class SisImportsApiController < ApplicationController
   before_filter :check_account
 
   def check_account
-    raise "SIS imports can only be executed on root accounts" unless @account.root_account?
-    raise "SIS imports can only be executed on enabled accounts" unless @account.allow_sis_import
+    return render json: {errors: ["SIS imports can only be executed on root accounts"]}, status: :bad_request unless @account.root_account?
+    return render json: {errors: ["SIS imports are not enabled for this account"]}, status: :forbidden unless @account.allow_sis_import
   end
 
   # @API Get SIS import list
   #
   # Returns the list of SIS imports for an account
   #
-  #   Examples:
-  #     curl 'https://<canvas>/api/v1/accounts/<account_id>/sis_imports' \
-  #         -H "Authorization: Bearer <token>"
+  # @argument created_since [Optional, DateTime]
+  #   If set, only shows imports created after the specified date (use ISO8601 format)
+  #
+  # Example:
+  #   curl 'https://<canvas>/api/v1/accounts/<account_id>/sis_imports' \
+  #     -H "Authorization: Bearer <token>"
   #
   # @returns [SisImport]
   def index
     if authorized_action(@account, @current_user, :manage_sis)
-      @batches = Api.paginate(@account.sis_batches.order('created_at DESC'), self, url_for({action: :index, controller: :sis_imports_api}))
+      scope = @account.sis_batches.order('created_at DESC')
+      if created_since = CanvasTime.try_parse(params[:created_since])
+        scope = scope.where("created_at > ?", created_since)
+      end
+      @batches = Api.paginate(scope, self, api_v1_account_sis_imports_url)
       render :json => ({ sis_imports: @batches})
     end
   end
@@ -291,6 +308,17 @@ class SisImportsApiController < ApplicationController
   #   If 'add_sis_stickiness' is also provided, 'clear_sis_stickiness' will
   #   overrule the behavior of 'add_sis_stickiness'
   #
+  # @argument diffing_data_set_identifier [String]
+  #   If set on a CSV import, Canvas will attempt to optimize the SIS import by
+  #   comparing this set of CSVs to the previous set that has the same data set
+  #   identifier, and only appliying the difference between the two. See the
+  #   SIS CSV Format documentation for more details.
+  #
+  # @argument diffing_remaster_data_set [Boolean]
+  #   If true, and diffing_data_set_identifier is sent, this SIS import will be
+  #   part of the data set, but diffing will not be performed. See the SIS CSV
+  #   Format documentation for details.
+  #
   # @returns SisImport
   def create
     if authorized_action(@account, @current_user, :manage_sis)
@@ -349,6 +377,9 @@ class SisImportsApiController < ApplicationController
         if batch_mode_term
           batch.batch_mode = true
           batch.batch_mode_term = batch_mode_term
+        elsif params[:diffing_data_set_identifier].present?
+          batch.enable_diffing(params[:diffing_data_set_identifier],
+                               remaster: value_to_boolean(params[:diffing_remaster_data_set]))
         end
 
         batch.options ||= {}

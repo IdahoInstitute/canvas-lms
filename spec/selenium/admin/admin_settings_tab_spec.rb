@@ -1,8 +1,8 @@
 require File.expand_path(File.dirname(__FILE__) + '/../common')
 
 describe "admin settings tab" do
-  include_examples "in-process server selenium tests"
-  before (:each) do
+  include_context "in-process server selenium tests"
+  before :each do
     course_with_admin_logged_in
     get "/accounts/#{Account.default.id}/settings"
   end
@@ -10,15 +10,18 @@ describe "admin settings tab" do
   def get_default_services
     default_services = []
     service_hash = Account.default.allowed_services_hash
-    service_hash.each { |k, v| default_services.push k if  v[:expose_to_ui] }
+    service_hash.each do |k, v|
+      default_services.push k if v[:expose_to_ui] &&
+        (!v[:expose_to_ui_proc] || v[:expose_to_ui_proc].call(@user, Account.default))
+    end
     default_services
   end
 
   def state_checker checker, check_state
     if (checker)
-      check_state.should be_true
+      expect(check_state).to be_truthy
     else
-      check_state.should be_false
+      expect(check_state).to be_falsey
     end
   end
 
@@ -38,7 +41,7 @@ describe "admin settings tab" do
       features.each do |feature|
         check_state = Account.default.service_enabled?(feature)
         state_checker checker, !check_state
-        default_selectors.push("#account_services_#{feature.to_s}")
+        default_selectors.push("#account_services_#{feature}")
       end
       css_selectors = default_selectors
     end
@@ -57,7 +60,7 @@ describe "admin settings tab" do
         features.each do |feature|
           check_state = Account.default.service_enabled?(feature)
           state_checker checker, check_state
-          default_selectors.push("#account_services_#{feature.to_s}")
+          default_selectors.push("#account_services_#{feature}")
         end
         if (checker)
           default_selectors += css_selectors
@@ -79,13 +82,19 @@ describe "admin settings tab" do
     wait_for_ajax_requests
   end
 
+  def go_to_feature_options(account_id)
+    get "/accounts/#{account_id}/settings"
+    f("#tab-features-link").click
+    wait_for_ajaximations
+  end
+
   context "account settings" do
 
     it "should change the default time zone to Lima" do
       f("#account_default_time_zone option[value='Lima']").click
       click_submit
-      Account.default.default_time_zone.name.should == "Lima"
-      f("#account_default_time_zone option[value='Lima']").attribute("selected").should be_true
+      expect(Account.default.default_time_zone.name).to eq "Lima"
+      expect(f("#account_default_time_zone option[value='Lima']").attribute("selected")).to be_truthy
     end
 
     describe "allow self-enrollment" do
@@ -96,8 +105,8 @@ describe "admin settings tab" do
           f("#account_settings_self_enrollment option[value=#{value}]").click
         end
         click_submit
-        Account.default[:settings][:self_enrollment].should == value
-        f("#account_settings_self_enrollment").should have_value value
+        expect(Account.default[:settings][:self_enrollment]).to eq value.presence
+        expect(f("#account_settings_self_enrollment")).to have_value value
       end
 
       it "should select never for self-enrollment" do
@@ -121,21 +130,30 @@ describe "admin settings tab" do
       check_box_verifier("#account_settings_allow_sending_scores_in_emails", :allow_sending_scores_in_emails, false)
     end
 
-    it "should click on 'restrict students from viewing courses before start date'" do
-      check_box_verifier("#account_settings_restrict_student_future_view", :restrict_student_future_view)
+    it "should set trusted referers for account" do
+      trusted_referers = 'https://example.com,http://example.com'
+      set_value f("#account_settings_trusted_referers"), trusted_referers
+      click_submit
+      expect(Account.default[:settings][:trusted_referers]).to eq trusted_referers
+      expect(f("#account_settings_trusted_referers").attribute('value')).to eq trusted_referers
+
+      set_value f("#account_settings_trusted_referers"), ''
+      click_submit
+      expect(Account.default[:settings][:trusted_referers]).to be_nil
+      expect(f("#account_settings_trusted_referers").attribute('value')).to eq ''
     end
   end
 
   context "global includes" do
     it "should not have a global includes section by default" do
-      fj('#account_settings_global_includes_settings:visible').should be_nil
+      expect(fj('#account_settings_global_includes_settings:visible')).to be_nil
     end
 
     it "should have a global includes section if enabled" do
       Account.default.settings = Account.default.settings.merge({ :global_includes => true })
       Account.default.save!
       section = f('#account_settings_global_includes_settings')
-      section.find_element(:id, 'account_settings_sub_account_includes').should_not be_nil
+      expect(section.find_element(:id, 'account_settings_sub_account_includes')).not_to be_nil
     end
 
     it "a sub-account should not have a global includes section by default" do
@@ -143,17 +161,17 @@ describe "admin settings tab" do
       Account.default.save!
       acct = account_model(:root_account => Account.default)
       get "/accounts/#{acct.id}/settings"
-      fj('#account_settings_global_includes_settings:visible').should be_nil
+      expect(fj('#account_settings_global_includes_settings:visible')).to be_nil
     end
 
-    it "a sub-account should have a global includes section if enabled by the parrent" do
+    it "a sub-account should have a global includes section if enabled by the parent" do
       Account.default.settings = Account.default.settings.merge({ :global_includes => true })
       Account.default.settings = Account.default.settings.merge({ :sub_account_includes => true })
       Account.default.save!
       acct = account_model(:root_account => Account.default)
       get "/accounts/#{acct.id}/settings"
       section = f('#account_settings_global_includes_settings')
-      section.find_element(:id, 'account_settings_sub_account_includes').should_not be_nil
+      expect(section.find_element(:id, 'account_settings_sub_account_includes')).not_to be_nil
     end
   end
 
@@ -164,15 +182,15 @@ describe "admin settings tab" do
       fj("#ip_filters .value[value='']:visible").send_keys value
       click_submit
       filter_hash = {name => value}
-      Account.default.settings[:ip_filters].should include filter_hash
-      fj("#ip_filters .name[value='#{name}']").should be_displayed
-      fj("#ip_filters .value[value='#{value}']").should be_displayed
+      expect(Account.default.settings[:ip_filters]).to include filter_hash
+      expect(fj("#ip_filters .name[value='#{name}']")).to be_displayed
+      expect(fj("#ip_filters .value[value='#{value}']")).to be_displayed
       filter_hash
     end
 
     it "should click on the quiz help link" do
       f(".ip_help_link").click
-      f("#ip_filters_dialog").text.should include_text "What are Quiz IP Filters?"
+      expect(f("#ip_filters_dialog").text).to include_text "What are Quiz IP Filters?"
     end
 
     it "should add a quiz filter " do
@@ -193,20 +211,19 @@ describe "admin settings tab" do
       replace_content(fj("#ip_filters .value:visible"), new_value)
       click_submit
       filter_hash = {new_name => new_value}
-      Account.default.settings[:ip_filters].should include filter_hash
-      fj("#ip_filters .name[value='#{new_name}']").should be_displayed
-      fj("#ip_filters .value[value='#{new_value}']").should be_displayed
+      expect(Account.default.settings[:ip_filters]).to include filter_hash
+      expect(fj("#ip_filters .name[value='#{new_name}']")).to be_displayed
+      expect(fj("#ip_filters .value[value='#{new_value}']")).to be_displayed
     end
 
     it "should delete a quiz filter" do
-      pending("bug #8348 - cannot remove quiz IP address filter") do
-        filter_hash = add_quiz_filter
-        f("#ip_filters .delete_filter_link").click
-        click_submit
-        f("#ip_filters .value[value='#{filter_hash.values.first}']").should be_nil
-        f("#ip_filters .name[value='#{filter_hash.keys.first}']").should be_nil
-        Account.default.settings[:ip_filters].should be_nil
-      end
+      skip("bug #8348 - cannot remove quiz IP address filter")
+      filter_hash = add_quiz_filter
+      f("#ip_filters .delete_filter_link").click
+      click_submit
+      expect(f("#ip_filters .value[value='#{filter_hash.values.first}']")).to be_nil
+      expect(f("#ip_filters .name[value='#{filter_hash.keys.first}']")).to be_nil
+      expect(Account.default.settings[:ip_filters]).to be_nil
     end
   end
 
@@ -227,15 +244,15 @@ describe "admin settings tab" do
         f("#account_settings_equella_endpoint").send_keys(equella_url)
         f("#account_settings_equella_teaser").send_keys("equella feature")
         click_submit
-        Account.default.settings[:equella_endpoint].should == equella_url
-        Account.default.settings[:equella_teaser].should == "equella feature"
-        f("#account_settings_equella_endpoint").should have_value equella_url
-        f("#account_settings_equella_teaser").should have_value "equella feature"
+        expect(Account.default.settings[:equella_endpoint]).to eq equella_url
+        expect(Account.default.settings[:equella_teaser]).to eq "equella feature"
+        expect(f("#account_settings_equella_endpoint")).to have_value equella_url
+        expect(f("#account_settings_equella_teaser")).to have_value "equella feature"
       end
 
       before(:each) do
         f("#enable_equella").click
-        is_checked("#enable_equella").should be_true
+        expect(is_checked("#enable_equella")).to be_truthy
       end
       it "should add an equella feature" do
         add_equella_feature
@@ -247,23 +264,23 @@ describe "admin settings tab" do
         replace_content(f("#account_settings_equella_endpoint"), new_equella_url)
         replace_content(f("#account_settings_equella_teaser"), "new equella feature")
         click_submit
-        Account.default.settings[:equella_endpoint].should == new_equella_url
-        Account.default.settings[:equella_teaser].should == "new equella feature"
-        f("#account_settings_equella_endpoint").should have_value new_equella_url
-        f("#account_settings_equella_teaser").should have_value "new equella feature"
+        expect(Account.default.settings[:equella_endpoint]).to eq new_equella_url
+        expect(Account.default.settings[:equella_teaser]).to eq "new equella feature"
+        expect(f("#account_settings_equella_endpoint")).to have_value new_equella_url
+        expect(f("#account_settings_equella_teaser")).to have_value "new equella feature"
       end
 
       it "should delete an equella feature" do
         add_equella_feature
-        fj("#account_settings_equella_endpoint:visible").should be_displayed
-        fj("#account_settings_equella_teaser:visible").should be_displayed
+        expect(fj("#account_settings_equella_endpoint:visible")).to be_displayed
+        expect(fj("#account_settings_equella_teaser:visible")).to be_displayed
         replace_content(f("#account_settings_equella_endpoint"), "")
         replace_content(f("#account_settings_equella_teaser"), "")
         click_submit
-        Account.default.settings[:equella_endpoint].should == ""
-        Account.default.settings[:equella_teaser].should == ""
-        fj("#account_settings_equella_endpoint:visible").should be_nil
-        fj("#account_settings_equella_teaser:visible").should be_nil
+        expect(Account.default.settings[:equella_endpoint]).to be_nil
+        expect(Account.default.settings[:equella_teaser]).to be_nil
+        expect(fj("#account_settings_equella_endpoint:visible")).to be_nil
+        expect(fj("#account_settings_equella_teaser:visible")).to be_nil
       end
     end
   end
@@ -272,7 +289,7 @@ describe "admin settings tab" do
 
     it "should click on the google help dialog" do
       fj("label['for'='account_services_google_docs_previews'] .icon-question").click
-      fj(".ui-dialog-title:visible").should include_text("About Google Docs Previews")
+      expect(fj(".ui-dialog-title:visible")).to include_text("About Google Docs Previews")
     end
 
     it "should unclick and then click on skype" do
@@ -283,11 +300,6 @@ describe "admin settings tab" do
     it "should unclick and then click on delicious" do
       check_box_verifier("#account_services_delicious", {:allowed_services => :delicious}, false)
       check_box_verifier("#account_services_delicious", {:allowed_services => :delicious})
-    end
-
-    it "should unclick and then click on diigo" do
-      check_box_verifier("#account_services_diigo", {:allowed_services => :diigo}, false)
-      check_box_verifier("#account_services_diigo", {:allowed_services => :diigo})
     end
 
     it "should unclick and click on google docs previews" do
@@ -309,21 +321,21 @@ describe "admin settings tab" do
     end
 
     it "should enable and disable a plugin service (setting)" do
-      Account.register_service(:myplugin, {:name => "My Plugin", :description => "", :expose_to_ui => :setting, :default => false})
+      AccountServices.register_service(:myplugin, {:name => "My Plugin", :description => "", :expose_to_ui => :setting, :default => false})
       get "/accounts/#{Account.default.id}/settings"
       check_box_verifier("#account_services_myplugin", {:allowed_services => :myplugin})
       check_box_verifier("#account_services_myplugin", {:allowed_services => :myplugin}, false)
     end
 
     it "should enable and disable a plugin service (service)" do
-      Account.register_service(:myplugin, {:name => "My Plugin", :description => "", :expose_to_ui => :service, :default => false})
+      AccountServices.register_service(:myplugin, {:name => "My Plugin", :description => "", :expose_to_ui => :service, :default => false})
       get "/accounts/#{Account.default.id}/settings"
       check_box_verifier("#account_services_myplugin", {:allowed_services => :myplugin})
       check_box_verifier("#account_services_myplugin", {:allowed_services => :myplugin}, false)
     end
   end
 
-  context "who can create wew courses" do
+  context "who can create new courses" do
 
     it "should check on teachers" do
       check_box_verifier("#account_settings_teachers_can_create_courses", :teachers_can_create_courses)
@@ -363,7 +375,7 @@ describe "admin settings tab" do
       set_checkbox(inputs.find{|e| e['id'].ends_with?('_available_to_admin')}, false)
 
       f('.custom_help_link:nth-child(2) .delete').click
-      f('.custom_help_link:nth-child(2)').should_not be_displayed
+      expect(f('.custom_help_link:nth-child(2)')).not_to be_displayed
 
       inputs = ff('.custom_help_link:nth-child(3) .formtable input')
       inputs.find{|e| e['id'].ends_with?('_text')}.send_keys('text2')
@@ -376,16 +388,16 @@ describe "admin settings tab" do
       set_checkbox(inputs.find{|e| e['id'].ends_with?('_available_to_admin')}, true)
 
       click_submit
-      Account.default.settings[:custom_help_links].should == [
+      expect(Account.default.settings[:custom_help_links]).to eq [
         {"text"=>"text", "subtext"=>"subtext", "url"=>"http://www.example.com/example", "available_to"=>["user", "student", "teacher"]},
         {"text"=>"text2", "subtext"=>"subtext2", "url"=>"http://www.example.com/example2", "available_to"=>["student", "admin"]}
       ]
 
       f('.custom_help_link:nth-child(1) .delete').click
-      f('.custom_help_link:nth-child(1)').should_not be_displayed
+      expect(f('.custom_help_link:nth-child(1)')).not_to be_displayed
 
       click_submit
-      Account.default.settings[:custom_help_links].should == [
+      expect(Account.default.settings[:custom_help_links]).to eq [
           {"text"=>"text2", "subtext"=>"subtext2", "url"=>"http://www.example.com/example2", "available_to"=>["student", "admin"]}
       ]
     end
@@ -402,9 +414,102 @@ describe "admin settings tab" do
       submit_form("#account_settings_notifications")
       wait_for_ajax_requests
 
-      Account.default.settings[:custom_help_links].should == [
+      expect(Account.default.settings[:custom_help_links]).to eq [
         {"text"=>"text", "subtext"=>"subtext", "url"=>"http://www.example.com/example", "available_to"=>["user", "student", "teacher"]}
       ]
     end
+  end
+
+  context "external integration keys" do
+    let!(:key_value) { '42' }
+    before(:once) do
+      ExternalIntegrationKey.key_type :external_key0, label: 'External Key 0', rights: { read: proc { true }, write: true }
+      ExternalIntegrationKey.key_type :external_key1, label: proc { 'External Key 1' }, rights: { read: true, write: false }
+      ExternalIntegrationKey.key_type :external_key2, label: 'External Key 2', rights: { read: proc { false }, write: false }
+    end
+
+    it "should not display external integration keys if no key types exist" do
+      ExternalIntegrationKey.stubs(:key_types).returns([])
+      get "/accounts/#{Account.default.id}/settings"
+      expect(f("#external_integration_keys")).to be_nil
+    end
+
+    it "should not display external integration keys if no rights are granted" do
+      ExternalIntegrationKey.any_instance.stubs(:grants_right_for?).returns(false)
+      get "/accounts/#{Account.default.id}/settings"
+      expect(f("#external_integration_keys")).to be_nil
+    end
+
+    it "should display keys with the correct rights" do
+      eik = ExternalIntegrationKey.new
+      eik.context = Account.default
+      eik.key_type = 'external_key0'
+      eik.key_value = key_value
+      eik.save
+
+      eik = ExternalIntegrationKey.new
+      eik.context = Account.default
+      eik.key_type = 'external_key1'
+      eik.key_value = key_value
+      eik.save
+
+      get "/accounts/#{Account.default.id}/settings"
+
+      expect(f("label[for='account_external_integration_keys_external_key0']").text).to eq 'External Key 0:'
+      expect(f("label[for='account_external_integration_keys_external_key1']").text).to eq 'External Key 1:'
+      expect(f("label[for='account_external_integration_keys_external_key2']")).to be_nil
+
+      expect(f("#account_external_integration_keys_external_key0").attribute('value')).to eq key_value
+      expect(f("#external_integration_keys span").text).to eq key_value
+      expect(f("#account_external_integration_keys_external_key2")).to be_nil
+    end
+
+    it "should update writable keys" do
+      set_value f("#account_external_integration_keys_external_key0"), key_value
+      click_submit
+
+      expect(f("#account_external_integration_keys_external_key0").attribute('value')).to eq key_value
+
+      set_value f("#account_external_integration_keys_external_key0"), ''
+      click_submit
+
+      expect(f("#account_external_integration_keys_external_key0").attribute('value')).to eq ''
+    end
+  end
+
+  it "should show all the feature flags" do
+    course_with_admin_logged_in(:account => Account.site_admin)
+    get "/accounts/#{Account.site_admin.id}/settings"
+    f("#tab-features-link").click
+    wait_for_ajaximations
+
+    Feature.applicable_features(Account.site_admin).each do |feature|
+      expect(f(".feature.#{feature.feature}")).to be_displayed
+    end
+  end
+
+  it "should test SIS Agent Token Authentication", priority: "1", test_id: 132577 do
+    course_with_admin_logged_in(:account => Account.site_admin)
+    sis_token = "canvas"
+    go_to_feature_options(Account.site_admin.id)
+    f("#ff_allowed_post_grades").click
+    go_to_feature_options(Account.default.id)
+    f("#ff_allowed_post_grades").click
+    f("#tab-settings-link").click
+    # SIS Agent Token Authentication will not appear without refresh
+    refresh_page
+    expect(f("#add_sis_app_token")).to be_displayed
+    expect(f("#account_settings_sis_app_token")).to be_displayed
+    f("#account_settings_sis_app_token").send_keys(sis_token)
+    f(".btn-primary").click
+    keep_trying_until{
+      expect(f("#account_settings_sis_app_token").attribute("value")).to eq sis_token
+    }
+    go_to_feature_options(Account.default.id)
+    f("#ff_off_post_grades").click
+    f('#tab-settings-link').click
+    refresh_page
+    sis_token_element = f("#account_settings_sis_app_token")
+    expect(@sis_token_element).to be_nil
   end
 end

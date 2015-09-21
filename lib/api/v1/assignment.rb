@@ -21,6 +21,7 @@ module Api::V1::Assignment
   include ApplicationHelper
   include Api::V1::ExternalTools::UrlHelpers
   include Api::V1::Locked
+  include Api::V1::AssignmentOverride
 
   API_ALLOWED_ASSIGNMENT_OUTPUT_FIELDS = {
     :only => %w(
@@ -36,13 +37,15 @@ module Api::V1::Assignment
       unlock_at
       assignment_group_id
       peer_reviews
+      anonymous_peer_reviews
       automatic_peer_reviews
       post_to_sis
       grade_group_students_individually
       group_category_id
       grading_standard_id
+      moderated_grading
     )
-  }
+  }.freeze
 
   API_ASSIGNMENT_NEW_RECORD_FIELDS = {
     :only => %w(
@@ -51,7 +54,7 @@ module Api::V1::Assignment
       assignment_group_id
       post_to_sis
     )
-  }
+  }.freeze
 
   def assignments_json(assignments, user, session, opts = {})
     assignments.map{ |assignment| assignment_json(assignment, user, session, opts) }
@@ -62,18 +65,31 @@ module Api::V1::Assignment
       include_discussion_topic: true,
       include_all_dates: false,
       override_dates: true,
-      needs_grading_count_by_section: false
+      needs_grading_count_by_section: false,
+      exclude_description: false
     )
 
     if opts[:override_dates] && !assignment.new_record?
       assignment = assignment.overridden_for(user)
+
     end
+
     fields = assignment.new_record? ? API_ASSIGNMENT_NEW_RECORD_FIELDS : API_ALLOWED_ASSIGNMENT_OUTPUT_FIELDS
+    if opts[:exclude_description]
+      fields_copy = fields[:only].dup
+      fields_copy.delete("description")
+      fields = {only: fields_copy}
+    end
+
     hash = api_json(assignment, user, session, fields)
     hash['course_id'] = assignment.context_id
     hash['name'] = assignment.title
     hash['submission_types'] = assignment.submission_types_array
     hash['has_submitted_submissions'] = assignment.has_submitted_submissions?
+
+    if !opts[:overrides].blank?
+      hash['overrides'] = assignment_overrides_json(opts[:overrides])
+    end
 
     if !assignment.user_submitted.nil?
       hash['user_submitted'] = assignment.user_submitted
@@ -94,12 +110,16 @@ module Api::V1::Assignment
 
     # use already generated hash['description'] because it is filtered by
     # Assignment#filter_attributes_for_user when the assignment is locked
-    hash['description'] = api_user_content(hash['description'],
-                                           @context || assignment.context,
-                                           user,
-                                           opts[:preloaded_user_content_attachments] || {})
+    unless opts[:exclude_description]
+      hash['description'] = api_user_content(hash['description'],
+                                             @context || assignment.context,
+                                             user,
+                                             opts[:preloaded_user_content_attachments] || {})
+    end
+
     hash['muted'] = assignment.muted?
     hash['html_url'] = course_assignment_url(assignment.context_id, assignment)
+    hash['has_overrides'] = assignment.has_overrides?
 
     if assignment.external_tool? && assignment.external_tool_tag.present?
       external_tool_tag = assignment.external_tool_tag
@@ -119,7 +139,7 @@ module Api::V1::Assignment
     end
 
     if assignment.grants_right?(user, :grade)
-      query = Assignments::NeedsGradingCountQuery.new(assignment, user)
+      query = Assignments::NeedsGradingCountQuery.new(assignment, user, opts[:needs_grading_course_proxy])
       if opts[:needs_grading_count_by_section]
         hash['needs_grading_count_by_section'] = query.count_by_section
       end
@@ -133,11 +153,8 @@ module Api::V1::Assignment
 
     if assignment.quiz
       hash['quiz_id'] = assignment.quiz.id
+      hash['hide_download_submissions_button'] = !assignment.quiz.has_file_upload_question?
       hash['anonymous_submissions'] = !!(assignment.quiz.anonymous_submissions)
-    end
-
-    if assignment.discussion_topic
-      hash['discussion_topic_id'] = assignment.discussion_topic.id
     end
 
     if assignment.allowed_extensions.present?
@@ -179,7 +196,7 @@ module Api::V1::Assignment
         assignment.discussion_topic.context,
         user,
         session,
-        include_assignment: false)
+        include_assignment: false, exclude_messages: opts[:exclude_description])
     end
 
     if opts[:include_all_dates] && assignment.assignment_overrides
@@ -195,16 +212,16 @@ module Api::V1::Assignment
       hash['module_ids'] = thing_in_module.context_module_tags.map(&:context_module_id) if thing_in_module
     end
 
-    if assignment.context.feature_enabled?(:draft_state)
-      hash['published'] = ! assignment.unpublished?
+    hash['published'] = ! assignment.unpublished?
+    if assignment.grants_right?(user, :update)
       hash['unpublishable'] = assignment.can_unpublish?
     end
 
-    if assignment.context.feature_enabled?(:differentiated_assignments)
+    if opts[:differentiated_assignments_enabled] || (opts[:differentiated_assignments_enabled] != false && assignment.context.feature_enabled?(:differentiated_assignments))
       hash['only_visible_to_overrides'] = value_to_boolean(assignment.only_visible_to_overrides)
 
       if opts[:include_visibility]
-        hash['assignment_visibility'] = assignment.students_with_visibility.pluck(:id).uniq
+        hash['assignment_visibility'] = (opts[:assignment_visibilities] || assignment.students_with_visibility.pluck(:id).uniq).map(&:to_s)
       end
     end
 
@@ -212,7 +229,15 @@ module Api::V1::Assignment
       hash['submission'] = submission_json(submission,assignment,user,session)
     end
 
+    if opts[:bucket]
+      hash['bucket'] = opts[:bucket]
+    end
+
     locked_json(hash, assignment, user, 'assignment')
+
+    if assignment.context.present?
+      hash['submissions_download_url'] = submissions_download_url(assignment.context, assignment)
+    end
 
     hash
   end
@@ -250,6 +275,7 @@ module Api::V1::Assignment
     assignment_group_id
     group_category_id
     peer_reviews
+    anonymous_peer_reviews
     peer_reviews_assign_at
     peer_review_count
     automatic_peer_reviews
@@ -370,7 +396,7 @@ module Api::V1::Assignment
       assignment.assignment_group = assignment.context.assignment_groups.where(id: ag_id).first
     end
 
-    if update_params.has_key?("group_category_id")
+    if update_params.has_key?("group_category_id") && !assignment.group_category_deleted_with_submissions?
       gc_id = update_params.delete("group_category_id").presence
       assignment.group_category = assignment.context.group_categories.where(id: gc_id).first
     end
@@ -378,7 +404,7 @@ module Api::V1::Assignment
     if update_params.has_key?("grading_standard_id")
       standard_id = update_params.delete("grading_standard_id")
       if standard_id.present?
-        grading_standard = GradingStandard.standards_for(context).where(id: standard_id).first
+        grading_standard = GradingStandard.for(context).where(id: standard_id).first
         assignment.grading_standard = grading_standard if grading_standard
       else
         assignment.grading_standard = nil
@@ -386,7 +412,12 @@ module Api::V1::Assignment
     end
 
     if assignment_params.key? "muted"
-      assignment.muted = value_to_boolean(assignment_params.delete("muted"))
+      muted = value_to_boolean(assignment_params.delete("muted"))
+      if muted
+        assignment.mute!
+      else
+        assignment.unmute!
+      end
     end
 
     if assignment.context.grants_right?(user, :manage_sis)
@@ -426,11 +457,9 @@ module Api::V1::Assignment
       update_params["description"] = process_incoming_html_content(update_params["description"])
     end
 
-    if assignment.context.feature_enabled?(:draft_state)
-      if assignment_params.has_key? "published"
-        published = value_to_boolean(assignment_params['published'])
-        assignment.workflow_state = published ? 'published' : 'unpublished'
-      end
+    if assignment_params.has_key? "published"
+      published = value_to_boolean(assignment_params['published'])
+      assignment.workflow_state = published ? 'published' : 'unpublished'
     end
 
     if assignment.context.feature_enabled?(:differentiated_assignments)
@@ -439,15 +468,29 @@ module Api::V1::Assignment
       end
     end
 
-    if assignment.context.feature_enabled?(:post_grades)
-      if assignment_params.has_key? "post_to_sis"
-        assignment.post_to_sis = value_to_boolean(assignment_params['post_to_sis'])
-      end
+    post_to_sis = assignment_params.key?('post_to_sis') ? value_to_boolean(assignment_params['post_to_sis']) : nil
+    unless post_to_sis.nil? || !Assignment.sis_grade_export_enabled?(assignment.context)
+      assignment.post_to_sis = post_to_sis
     end
+
+    if assignment.context.feature_enabled?(:moderated_grading) && assignment_params.key?('moderated_grading')
+      assignment.moderated_grading = value_to_boolean(assignment_params['moderated_grading'])
+    end
+
     assignment.updating_user = user
     assignment.attributes = update_params
     assignment.infer_times
 
     assignment
+  end
+
+  private
+
+  def submissions_download_url(context, assignment)
+    if assignment.quiz?
+      course_quiz_quiz_submissions_url(context, assignment.quiz, zip: 1)
+    else
+      course_assignment_submissions_url(context, assignment, zip: 1)
+    end
   end
 end

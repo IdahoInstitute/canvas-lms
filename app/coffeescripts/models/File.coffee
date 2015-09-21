@@ -26,7 +26,7 @@ define [
         # backbone would do by default.
         "/api/v1/files/#{@id}"
 
-    initialize: (attributes, options) ->
+    initialize: (attributes, options = {}) ->
       @preflightUrl = options.preflightUrl
       super
 
@@ -68,3 +68,12 @@ define [
     present: ->
       _.clone(@attributes)
 
+    externalToolEnabled: (tool) =>
+      if tool.accept_media_types && tool.accept_media_types.length > 0
+        content_type = @get('content-type')
+        _.find(tool.accept_media_types.split(","), (t) ->
+          regex = new RegExp("^#{t.replace('*', '.*')}$")
+          content_type.match(regex)
+        )
+      else
+        true

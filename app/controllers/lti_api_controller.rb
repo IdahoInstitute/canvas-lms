@@ -16,7 +16,9 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
+require 'oauth'
 require 'oauth/client/action_pack'
+require 'nokogiri'
 
 class LtiApiController < ApplicationController
   skip_before_filter :require_user
@@ -53,23 +55,83 @@ class LtiApiController < ApplicationController
     render :text => e.to_s, :status => 401
   end
 
-  def xapi
-    verify_oauth
+  # examples: https://github.com/adlnet/xAPI-Spec/blob/master/xAPI.md#AppendixA
+  #
+  # {
+  #   id: "12345678-1234-5678-1234-567812345678",
+  #   actor: {
+  #     account: {
+  #       homePage: "http://www.instructure.com/",
+  #       name: "uniquenameofsomekind"
+  #     }
+  #   },
+  #   verb: {
+  #     id: "http://adlnet.gov/expapi/verbs/interacted",
+  #     display: {
+  #       "en-US" => "interacted"
+  #     }
+  #   },
+  #   object: {
+  #     id: "http://example.com/"
+  #   },
+  #   result: {
+  #     duration: "PT10M0S"
+  #   }
+  # }
+  #
+  # * object.id will be logged as url
+  # * result.duration must be an ISO 8601 duration if supplied
+  def xapi_service
+    token = Lti::AnalyticsService::Token.parse_and_validate(params[:token])
+    verify_oauth(token.tool)
 
     if request.content_type != "application/json"
       return render :text => '', :status => 415
     end
 
-    source_id = params[:actor]['account']['name']
-    course, assignment, user = BasicLTI::BasicOutcomes.decode_source_id(@tool, source_id)
-
-    duration = params[:result]['duration']
-    seconds = duration.match(/PT(\d+)S/)[1].to_i
-
-    # TODO: This should create an asset user access and page view as well.
-    course.enrollments.where(:user_id => user).update_all(['total_activity_time = total_activity_time + ?', seconds])
+    Lti::XapiService.log_page_view(token, params)
 
     return render :text => '', :status => 200
+  rescue BasicLTI::BasicOutcomes::Unauthorized => e
+    return render :text => e, :status => 401
+  end
+
+  #
+  #  {
+  #   "@context": "http://purl.imsglobal.org/ctx/caliper/v1/ViewEvent",
+  #   "@type": "http://purl.imsglobal.org/caliper/v1/ViewEvent",
+  #   "action": "viewed",
+  #   "startedAtTime": 1402965614516,
+  #   "duration": null,
+  #   "actor": {
+  #     "@id": "(the_lti_guid_sent_for_the_user)lkasdfklasdfjklasdl",
+  #     "@type": "http://purl.imsglobal.org/caliper/v1/lis/Person"
+  #   },
+  #   "object": {
+  #     "@id": "https://example.com/my_tools/url",
+  #     "@type": "http://www.idpf.org/epub/vocab/structure/#volume", // don't know...
+  #     "name": "Some name"
+  #   },
+  #   "edApp": {
+  #     "@id": "https://example.com/some/fake/thing/for/my/app",
+  #     "@type": "http://purl.imsglobal.org/caliper/v1/SoftwareApplication",
+  #     "name": "demo app",
+  #     "properties": {},
+  #     "lastModifiedTime": 1402965614516
+  #   }
+  # }
+  #
+  # * object.@id will be logged as url
+  # * duration must be an ISO 8601 duration if supplied
+  def caliper_service
+    token = Lti::AnalyticsService::Token.parse_and_validate(params[:token])
+    verify_oauth(token.tool)
+
+    Lti::CaliperService.log_page_view(token, params)
+
+    return render :text => '', :status => 200
+  rescue BasicLTI::BasicOutcomes::Unauthorized => e
+    return render :text => e, :status => 401
   end
 
   def logout_service
@@ -80,6 +142,19 @@ class LtiApiController < ApplicationController
   rescue BasicLTI::BasicOutcomes::Unauthorized => e
     return render :text => e, :status => 401
   end
+
+  def turnitin_outcomes_placement
+    verify_oauth
+    _course, assignment, user = BasicLTI::BasicOutcomes.decode_source_id(@tool, params['lis_result_sourcedid'])
+    assignment.update_attribute(:turnitin_enabled,  false) if assignment.turnitin_enabled?
+    request.body.rewind
+    turnitin_processor = Turnitin::OutcomeResponseProcessor.new(@tool, assignment, user, JSON.parse(request.body.read))
+    turnitin_processor.process
+    render json: {}, status: 200
+  rescue BasicLTI::BasicOutcomes::Unauthorized => e
+    return render :text => e, status:401
+  end
+
 
   protected
 

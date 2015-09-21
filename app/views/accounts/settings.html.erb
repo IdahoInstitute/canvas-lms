@@ -2,7 +2,7 @@
   @active_tab = "settings"
   add_crumb t(:settings_crumb, "Settings")
   js_bundle :account_settings
-  jammit_css :account_settings, :reports, :tinymce
+  css_bundle :account_settings, :reports, :tinymce
   content_for :page_title, t(:page_title, "Account Settings")
   if can_do(@context, @current_user, :manage_storage_quotas)
     js_env :ACCOUNT => {
@@ -10,7 +10,8 @@
       'default_storage_quota_mb' => @context.default_storage_quota_mb,
       'default_user_storage_quota_mb' => @context.default_user_storage_quota_mb,
       'default_group_storage_quota_mb' => @context.default_group_storage_quota_mb,
-      'site_admin' => @account.site_admin?
+      'site_admin' => @account.site_admin?,
+      'root_account' => @account.root_account?
     }
   end
 %>
@@ -64,7 +65,7 @@
     <div id="tab-settings">
       <h2 class="screenreader-only"><%= t('headings.settings', "Account Settings") %></h2>
       <%= form_for :account, :url => account_url(@account), :html => {:method => :put, :id => "account_settings", :class => 'account_settings'} do |f| %>
-        <fieldset id="account_settings" class="">
+        <fieldset id="account_settings">
           <legend><%= t(:account_settings_title, "Account Settings") %></legend>
           <table class="formtable">
             <tr>
@@ -131,19 +132,33 @@ TEXT
                     </td>
                   </tr>
 
-                  <% unless @account.account_authorization_config
-                    #if the account has a account_authorization_config, we'll use it's login_handle_name, and this is irrelevant
+                  <% unless @account.non_canvas_auth_configured?
+                    # if the account has a account_authorization_config,
+                    # we'll control this setting from that page
                   %>
                     <tr>
-                      <td><%= settings.blabel :login_handle_name, :en => "Login Label" %></td>
+                      <td>
+                        <%= settings.blabel :login_handle_name, en: "Login Label" %>
+                      </td>
                       <td>
                         <%= settings.text_field :login_handle_name,
-                                                :value => @account.settings[:login_handle_name],
-                                                :class => 'same-width-as-select',
-                                                :placeholder => t(:login_handle_name_placeholder, "ex: Login, Username, or Student ID") %>
+                                                value: @account.login_handle_name,
+                                                class: 'same-width-as-select',
+                                                placeholder: t(:login_handle_name_placeholder, "ex: Login, Username, or Student ID") %>
                       </td>
                     </tr>
                   <% end %>
+
+                  <tr>
+                    <td><%= settings.blabel :trusted_referers, :en => "Trusted HTTP Referers" %></td>
+                    <td>
+                      <%= settings.text_field :trusted_referers,
+                                              :value => @account.settings[:trusted_referers],
+                                              :class => 'same-width-as-select',
+                                              :placeholder => "https://example.edu" %>
+                      <p style="font-size: 0.9em;"><%= t("This is a comma separated list of URL's to trust.  Trusting any URL's in this list will bypass the CSRF token when logging in to Canvas.") %></p>
+                    </td>
+                  </tr>
 
                   <tr>
                     <td colspan="2"><%= settings.check_box :prevent_course_renaming_by_teachers, :checked => @account.settings[:prevent_course_renaming_by_teachers] %>
@@ -155,16 +170,57 @@ TEXT
                     <%= settings.label :allow_sending_scores_in_emails, :en => "Students can opt-in to receiving scores in email notifications" %>
                     </td>
                   </tr>
-                  <tr>
-                    <td colspan="2"><%= settings.check_box :restrict_student_future_view, :checked => @account.settings[:restrict_student_future_view] %>
-                      <%= settings.label :restrict_student_future_view, :en => "Restrict students from viewing courses before start date" %>
-                    </td>
-                  </tr>
+                  <% if @account.grants_right?(@current_user, :manage_site_settings) %>
+                    <tr>
+                      <td colspan="2"><%= settings.check_box :include_students_in_global_survey, checked: @account.include_students_in_global_survey?%>
+                        <%= settings.label :include_students_in_global_survey, en: "Include students in global surveys" %>
+                      </td>
+                    </tr>
+                  <% end %>
                   <tr>
                     <td colspan="2"><%= settings.check_box :restrict_quiz_questions, :checked => @account.settings[:restrict_quiz_questions] %>
                       <%= settings.label :restrict_quiz_questions, :en => "Restrict students from viewing quiz questions after course end date" %>
                     </td>
                   </tr>
+                <% end %>
+              <% end %>
+            <% end %>
+            <% unless @account.site_admin? %>
+              <%= f.fields_for :settings do |settings| %>
+                <%= settings.fields_for :restrict_student_past_view do |r| %>
+                  <% hash = @account.restrict_student_past_view %>
+                  <% disabled = hash[:locked] && hash[:inherited] %>
+                  <tr>
+                    <td colspan="2"><%= r.check_box :value, :checked => hash[:value], :disabled => disabled %>
+                      <%= r.label :restrict_student_past_view, :en => "Restrict students from viewing courses after end date" %>
+                    </td>
+                  </tr>
+                  <% unless disabled %>
+                    <tr>
+                      <td colspan="2" class="sub_checkbox">
+                        <%= r.check_box :locked, :checked => hash[:locked] %>
+                        <%= r.label :locked, :en => "Lock this setting for sub-accounts and courses" %>
+                      </td>
+                    </tr>
+                  <% end %>
+                <% end %>
+
+                <%= settings.fields_for :restrict_student_future_view do |r| %>
+                  <% hash = @account.restrict_student_future_view %>
+                  <% disabled = hash[:locked] && hash[:inherited] %>
+                  <tr>
+                    <td colspan="2"><%= r.check_box :value, :checked => hash[:value], :disabled => disabled %>
+                      <%= r.label :restrict_student_future_view, :en => "Restrict students from viewing courses before start date" %>
+                    </td>
+                  </tr>
+                  <% unless disabled %>
+                    <tr>
+                      <td colspan="2" class="sub_checkbox">
+                        <%= r.check_box :locked, :checked => hash[:locked] %>
+                        <%= r.label :locked, :en => "Lock this setting for sub-accounts and courses" %>
+                      </td>
+                    </tr>
+                  <% end %>
                 <% end %>
               <% end %>
             <% end %>
@@ -259,6 +315,21 @@ TEXT
                 <div>
                   <%= settings.check_box :global_includes, :checked => @account.settings[:global_includes] %>
                   <%= settings.label :global_includes, :en => "Global CSS/JavaScript includes" %>
+                  <% if use_new_styles? %>
+                    <div class="account_settings__help-text">
+                      <%= t do %>
+                        When enabled, global JS and CSS files can be uploaded in the
+                        <%= link_to t("Theme Editor"), account_theme_editor_path(@account) %>.
+                      <% end %>
+                    </div>
+                    <div id="new_styles_sub_account_includes" style="<%= hidden unless @account.allow_global_includes? %>">
+                      <%= settings.check_box :sub_account_includes,
+                        id: :account_settings_new_sub_account_includes,
+                        checked: @account.settings[:sub_account_includes]
+                      %>
+                      <%= settings.label :new_sub_account_includes, :en => "Let sub-accounts customize themes and add additional includes" %>
+                    </div>
+                  <% end %>
                 </div>
                 <div id="show_scheduler_checkbox">
                   <%= settings.check_box :show_scheduler, :checked => @account.settings[:show_scheduler] %>
@@ -266,9 +337,9 @@ TEXT
                 </div>
                 <div>
                   <%= settings.check_box :enable_profiles, :checked => @account.settings[:enable_profiles] %>
-                  <%= settings.label :enable_profiles, :en => "Enable Profiles" %>
+                  <%= settings.label :enable_profiles, :en => "Enable Profiles" %> 
                 </div>
-                <% if @account.account_authorization_config %>
+                <% if @account.non_canvas_auth_configured? %>
                   <div>
                     <%= settings.check_box :canvas_authentication, :checked => @account.canvas_authentication? %>
                     <%= settings.label :canvas_authentication, :en => "Canvas Authentication" %>
@@ -304,14 +375,14 @@ TEXT
                     <div id="open_registration_delegated_warning_dialog" style="display: none;">
                         <%= t(:open_registration_delegated_warning_message,
                         "An external identity provider is enabled, and users created via open registration may not be able to log in unless
-                        the external identity provider's login form has a link back to %{url}.", :url => login_url(:canvas_login => 1)) %>
+                        the external identity provider's login form has a link back to %{url}.", :url => canvas_login_url) %>
                     </div>
                   <% end %>
                 </div>
               <% end %>
               <div>
                 <%= settings.check_box :users_can_edit_name, :checked => @account.settings[:users_can_edit_name] != false %>
-                <%= settings.label :users_can_edit_name, :en => "Users can edit display name" %>
+                <%= settings.label :users_can_edit_name, :en => "Users can edit their name" %>
               </div>
 
               <div>
@@ -345,26 +416,50 @@ TEXT
           <% end %>
         </fieldset>
 
-        <fieldset id="account_settings_global_includes_settings" style="<%= hidden unless @account.allow_global_includes? %>">
-          <legend><%= t(:global_js_and_css_includes_title, "Global JavaScript and CSS Includes") %></legend>
-          <p style="font-size: 0.9em;"><%= t(:global_js_and_css_includes_description, "These files will be included on all page loads for your account") %></p>
-          <%= f.fields_for :settings do |settings| %>
-            <table class="formtable">
-              <tr>
-                <td><%= settings.blabel :global_javascript, :en => "Global JavaScript URL" %></td>
-                <td><%= settings.text_field :global_javascript, :value => @account.settings[:global_javascript] %></td>
-              </tr>
-              <tr>
-                <td><%= settings.blabel :global_stylesheet, :en => "Global CSS URL" %></td>
-                <td><%= settings.text_field :global_stylesheet, :value => @account.settings[:global_stylesheet] %></td>
-              </tr>
-            </table>
-            <div>
-              <%= settings.check_box :sub_account_includes, :checked => @account.settings[:sub_account_includes] %>
-              <%= settings.label :sub_account_includes, :en => "Let sub-accounts define additional includes" %>
-            </div>
-          <% end %>
-        </fieldset>
+        <% unless use_new_styles? %>
+          <fieldset id="account_settings_global_includes_settings" style="<%= hidden unless @account.allow_global_includes? %>">
+            <legend><%= t(:global_js_and_css_includes_title, "Global JavaScript and CSS Includes") %></legend>
+            <p style="font-size: 0.9em;"><%= t(:global_js_and_css_includes_description, "These files will be included on all page loads for your account") %></p>
+            <%= f.fields_for :settings do |settings| %>
+              <table class="formtable">
+                <tr>
+                  <td><%= settings.blabel :global_javascript, :en => "Global JavaScript URL" %></td>
+                  <td><%= settings.text_field :global_javascript, :value => @account.settings[:global_javascript] %></td>
+                </tr>
+                <tr>
+                  <td><%= settings.blabel :global_stylesheet, :en => "Global CSS URL" %></td>
+                  <td><%= settings.text_field :global_stylesheet, :value => @account.settings[:global_stylesheet] %></td>
+                </tr>
+              </table>
+              <div>
+                <%= settings.check_box :sub_account_includes, :checked => @account.settings[:sub_account_includes] %>
+                <%= settings.label :sub_account_includes, :en => "Let sub-accounts define additional includes" %>
+              </div>
+            <% end %>
+          </fieldset>
+        <% end %>
+
+        <% if !@account.site_admin? &&
+                @account.root_account? &&
+                @account.feature_allowed?(:post_grades) &&
+                @account.grants_right?(@current_user, :manage_site_settings) %>
+            <fieldset id="add_sis_app_token">
+              <legend><%= t("SIS Agent Token Authentication") %></legend>
+              <p style="font-size: 0.9em;"><%= t("This will allow you to authenticate Canvas for posting grades to SIS") %></p>
+              <%= f.fields_for :settings do |settings| %>
+                  <table class="formtable">
+                    <tr>
+                      <td><%= settings.blabel :sis_app_token, :en => "SIS Agent Token" %></td>
+                      <td><%= settings.text_field :sis_app_token, :value => @account.settings[:sis_app_token] %></td>
+                    </tr>
+                    <tr>
+                      <td><%= settings.blabel :sis_app_url, :en => "SIS App URL" %></td>
+                      <td><%= settings.text_field :sis_app_url, :value => @account.settings[:sis_app_url] %></td>
+                    </tr>
+                  </table>
+              <% end %>
+            </fieldset>
+        <% end %>
 
         <% if @account.root_account? && !@account.site_admin? && Setting.get("show_feedback_link", "false") == "true"  %>
           <fieldset>
@@ -491,17 +586,15 @@ TEXT
                    the magic is in giving it an id of "<name_of_service>_help_dialog" and class="service_help_dialog" -->
               <div class="service_help_dialog" title="<%= t(:about_google_docs_tooltip, "About Google Docs Previews") %>" id="google_docs_previews_help_dialog">
                 <%= mt(:about_google_docs, <<-TEXT, :terms_url => "https://docs.google.com/viewer/TOS")
-Google Docs Previews allow users to view documents from
-within Canvas, rather than having to download them and
+Google Docs Previews allow users to view documents from 
+within Canvas, rather than having to download them and 
 open the corresponding program (e.g. Word or Excel).
 
-If Scribd has been enabled on this account, Canvas will
-try to use it to show the preview. If the document
-cannot be previewed in Scribd, or if the user does not
-have the Flash player installed (e.g. iPad/iPhone),
-Canvas will fall back to using Google Docs Previews
-if they are enabled. By using this service you
-acknowledge that you have read and agreed to the
+Google Docs Previews can also render file types
+not supported by the Canvas document previewer.
+
+By using this service you 
+acknowledge that you have read and agreed to the 
 [Google Docs Viewer Terms of Service](%{terms_url}).
                   TEXT
                 %>
@@ -530,6 +623,8 @@ acknowledge that you have read and agreed to the
             <% end %>
           </fieldset>
         <% end %>
+
+        <%= render partial: 'external_integration_keys', locals: { f: f } %>
 
         <div class="button-container">
           <button type="submit" class="btn btn-primary"><%= t(:update_settings_button, "Update Settings") %></button>
@@ -657,7 +752,7 @@ acknowledge that you have read and agreed to the
     <h2><%= t(:account_admins_title, "Account Admins") %></h2>
     <ul class="admins_list user_list list admins">
       <%= render :partial => 'account_user', :collection => @account_users %>
-      <% available_roles = @context.available_account_roles(@current_user) %>
+      <% available_roles = @context.available_account_roles(false, @current_user) %>
       <% unless available_roles.empty? %>
         <%= render :partial => 'account_user', :object => nil %>
       <% end %>
@@ -669,10 +764,10 @@ acknowledge that you have read and agreed to the
         <h2><%= t(:add_admin_title, "Add Account Admins") %></h2>
         <div style="margin-top: 5px;">
           <div>
-            <%= label_tag :membership_type, :en => "Add More" %>
-            <select name="membership_type" id="admin_membership_type">
-            <% available_roles.each do |type| %>
-              <option value="<%= type %>"><%= AccountUser.readable_type(type) %></option>
+            <%= label_tag :role_id, :en => "Add More" %>
+            <select name="role_id" id="admin_role_id">
+            <% available_roles.each do |role| %>
+              <option value="<%= role.id %>"><%= AccountUser.readable_type(role.name) %></option>
             <% end %>
             </select>
           </div>
@@ -707,22 +802,25 @@ acknowledge that you have read and agreed to the
               <a href="#" rel="<%= context_url(@account, :context_account_notification_url, announcement) %>" class="delete_notification_link close" title="<%= t(:delete_announcement_tooltip, "Delete this Announcement") %>">×</a>
             <% end %>
 
-            <div class="global-message image-block">
-              <div class="image-block-image">
+            <div class="ic-notification ic-notification--admin-created ic-notification--<%= notification_container_classname(announcement) %>">
+              <div class="ic-notification__icon" role="presentation">
                 <i class="<%= notification_icon_classname(announcement) %>"></i>
-                <span class="hidden-inline-text">
+                <span class="screenreader-only">
                   <%= accessible_message_icon_text(notification_icon_type(announcement)) %>
                 </span>
               </div>
-              <div class="image-block-content">
-                <div class="subject title">
-                  <%= announcement.subject %>
-                </div>
-                <div class="message user_content">
-                  <%= user_content(announcement.message) %>
+              <div class="ic-notification__content">
+                <div class="ic-notification__message">
+                  <h4 class="ic-notification__title notification_subject">
+                    <%= announcement.subject %>
+                  </h4>
+                  <span class="notification_message">
+                    <%= user_content(announcement.message) %>
+                  </span>
                 </div>
               </div>
             </div>
+
             <div class="announcement-details">
               <span>
                 <%= t(:alert_timespan, "from %{start_at} to %{end_at}",
@@ -731,9 +829,10 @@ acknowledge that you have read and agreed to the
               </span>&nbsp;&nbsp;
               <%= link_to(context_user_name(@account, announcement.user_id), user_path(announcement.user_id)) %>
             </div>
+
             <% if announcement.required_account_service %>
               <div>
-                <%= Account.allowable_services[announcement.required_account_service.to_sym].try(:[], :name) %>
+                <%= AccountServices.allowable_services[announcement.required_account_service.to_sym].try(:[], :name) %>
               </div>
             <% end %>
             <% unless announcement.account_notification_roles.empty? %>
@@ -741,15 +840,14 @@ acknowledge that you have read and agreed to the
                 <%= t :announcement_sent_to_roles, "Send only to the following types of users:" %>
                 <ul>
                   <% announcement.account_notification_roles.each do |r| %>
-                    <% @enrollment_types.select {|rt| rt[:name] == r.role_type }.each do |rt| %>
-                      <li><%= rt[:plural_label][] %></li>
+                    <% @course_roles.select {|rt| rt[:id] == r.role_id }.each do |rt| %>
+                      <li><%= rt[:label] %></li>
                     <% end %>
                     <% # NilEnrollment is a special case %>
-                    <% if r.role_type == "NilEnrollment" %>
+                    <% if r.role_id.nil? %>
                       <li><%= t :no_enrollment_roles, "Unenrolled users" %></li>
                     <% end %>
-                    <% @role_types.select {|rt| rt[:name] == r.role_type }.each do |rt| %>
-                      <% # no plural_label :( %>
+                    <% @account_roles.select {|rt| rt[:id] == r.role_id }.each do |rt| %>
                       <li><%= rt[:label]  %></li>
                     <% end %>
                   <% end %>
@@ -765,19 +863,54 @@ acknowledge that you have read and agreed to the
         <% end %>
       </ul>
       <% if can_do(@account, @current_user, :manage_alerts) %>
-        <a href="#" class="btn btn-primary element_toggler" role="button" data-hide-while-target-shown="true" aria-controls="add_notification_form"><i class="icon-add"></i> <%= t(:add_announcement_link, "Add a New Announcement") %></a>
-        <%= form_for :account_notification, :url => account_account_notifications_url(@account), :html => {:id => "add_notification_form", :style => 'display: none;', :class => 'well', :role => "region" } do |f| %>
+        <a href="#" class="btn btn-primary element_toggler" role="button" data-hide-while-target-shown="true" aria-controls="add_notification_form">
+          <i class="icon-add"></i> <%= t(:add_announcement_link, "Add a New Announcement") %>
+        </a>
+        <%= form_for :account_notification,
+                     url: account_account_notifications_url(@account),
+                     html: {
+                       id: "add_notification_form",
+                       style: 'display: none;',
+                       class: 'well',
+                       role: "region" } do |f| %>
           <table class="formtable">
             <tr>
-              <td><%= f.blabel :subject, :en => "Subject" %></td>
+              <td><%= f.blabel :subject, en: "Subject" %></td>
               <td><%= f.text_field :subject %></td>
-            </tr><tr>
-              <td><%= f.blabel :start_at, :en => "Starts" %></td>
-              <td><%= f.text_field :start_at, :class => 'datetime_field' %></td>
-            </tr><tr>
-              <td><%= f.blabel :end_at, :en => "Ends" %></td>
-              <td><%= f.text_field :end_at, :class => 'datetime_field' %></td>
-            </tr><tr>
+            </tr>
+            <tr>
+              <td>
+                <%= f.blabel :start_at, en: "Starts" %>
+                <label class="screenreader-only" id="announcment_starts_at_label">
+                  <%= t("Announcement starts at") %>
+                  <%= datepicker_screenreader_prompt %>
+                </label>
+              </td>
+              <td>
+                <%= f.text_field :start_at,
+                                 class: 'datetime_field',
+                                 "aria-labelledby" => "announcement_starts_at_label",
+                                 "data-tooltip" => "",
+                                 title: accessible_date_format %>
+              </td>
+            </tr>
+            <tr>
+              <td>
+                <%= f.blabel :end_at, en: "Ends" %>
+                <label class="screenreader-only" id="announcment_ends_at_label">
+                  <%= t("Announcement ends at") %>
+                  <%= datepicker_screenreader_prompt %>
+                </label>
+              </td>
+              <td>
+                <%= f.text_field :end_at,
+                                 class: 'datetime_field',
+                                 "aria-labelledby" => "announcement_ends_at_label",
+                                 "data-tooltip" => "",
+                                 title: accessible_date_format %>
+              </td>
+            </tr>
+            <tr>
               <td><%= f.blabel :account_notification_icon, :en => "Icon" %></td>
               <td>
                 <select id="account_notification_icon" name="account_notification[icon]">
@@ -810,41 +943,37 @@ acknowledge that you have read and agreed to the
             </tr>
             <tr id="restrict_to_roles">
               <td id="restrict_to_enrollment_roles">
-                <% unless @enrollment_types.nil? %>
-                  <%= t :course_roles, "Course roles:" %>
-                  <ul>
-                    <% @enrollment_types.each do |r| %>
-                      <li id="account_notification_role_<%= r[:name]%>">
-                        <label>
-                          <%= check_box_tag "account_notification_roles[]", r[:name], false, { :class => "account_notification_role_cbx", :id => "account_notification_role_#{r[:name]}_cbx" } %>
-                          <%= r[:plural_label][] %>
-                        </label>
-                      </li>
-                    <% end %>
-                    <% # NilEnrollment is a special case, because it's not actually a role, just a status reflecting that the user is not part of any course %>
-                    <li id="account_notification_role_NilEnrollment">
+                <%= t :course_roles, "Course roles:" %>
+                <ul>
+                  <% @course_roles.each do |r| %>
+                    <li id="account_notification_role_<%= r[:id]%>">
                       <label>
-                        <%= check_box_tag "account_notification_roles[]", "NilEnrollment", false, { :class => "account_notification_role_cbx", :id => "account_notification_role_NilEnrollment_cbx" } %>
-                        <%= t :no_enrollment_roles, "Unenrolled users" %>
+                        <%= check_box_tag "account_notification_roles[]", r[:id], false, { :class => "account_notification_role_cbx", :id => "account_notification_role_#{r[:id]}_cbx" } %>
+                        <%= r[:label] %>
                       </label>
                     </li>
-                  </ul>
-                <% end %>
+                  <% end %>
+                  <% # NilEnrollment is a special case, because it's not actually a role, just a status reflecting that the user is not part of any course %>
+                  <li id="account_notification_role_NilEnrollment">
+                    <label>
+                      <%= check_box_tag "account_notification_roles[]", "NilEnrollment", false, { :class => "account_notification_role_cbx", :id => "account_notification_role_NilEnrollment_cbx" } %>
+                      <%= t :no_enrollment_roles, "Unenrolled users" %>
+                    </label>
+                  </li>
+                </ul>
               </td>
               <td id="restrict_to_membership_roles">
-                <% unless @role_types.nil? %>
-                  <%= t :account_roles, "Account roles:" %>
-                  <ul>
-                    <% @role_types.each do |r| %>
-                      <li id="account_notification_role_<%= r[:name]%>">
-                        <label>
-                          <%= check_box_tag "account_notification_roles[]", r[:name], false, { :class => "account_notification_role_cbx", :id => "account_notification_role_#{r[:name]}_cbx" } %>
-                          <%= r[:label] %>
-                        </label>
-                      </li>
-                    <% end %>
-                  </ul>
-                <% end %>
+                <%= t :account_roles, "Account roles:" %>
+                <ul>
+                  <% @account_roles.each do |r| %>
+                    <li id="account_notification_role_<%= r[:id]%>">
+                      <label>
+                        <%= check_box_tag "account_notification_roles[]", r[:id], false, { :class => "account_notification_role_cbx", :id => "account_notification_role_#{r[:id]}_cbx" } %>
+                        <%= r[:label] %>
+                      </label>
+                    </li>
+                  <% end %>
+                </ul>
               </td>
             </tr>
             <tr>

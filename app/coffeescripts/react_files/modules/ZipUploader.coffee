@@ -32,7 +32,7 @@ define [
       @_actualUpload()
 
     onUploadPosted: (uploadResults) =>
-      if (event.target.status >= 400)
+      if (uploadResults.target && uploadResults.target.status >= 400)
         @deferred.reject()
         return
 
@@ -41,12 +41,12 @@ define [
         $.getJSON(url).then (results) =>
           @getContentMigration()
       else
-        results = $.parseJSON(event.target.response)
+        results = $.parseJSON(uploadResults.target.response)
         @getContentMigration()
 
     # get the content migration when ready and use progress api to pull migration progress
     getContentMigration: =>
-      $.getJSON("/api/v1/courses/#{@contextId}/content_migrations/#{@contentMigrationId}").then (results) =>
+      $.getJSON("/api/v1/#{@contextType}/#{@contextId}/content_migrations/#{@contentMigrationId}").then (results) =>
         if (!results.progress_url)
           setTimeout( =>
             @getContentMigration()
@@ -68,9 +68,9 @@ define [
 
     onMigrationComplete: ->
       # reload to get new files to appear
-      promise = @folder.files.fetch({reset: true}).then =>
-        @deferred.resolve()
-
+      @folder.folders.fetch({reset: true}).then =>
+        @folder.files.fetch({reset: true}).then =>
+          @deferred.resolve()
 
     trackProgress: (e) =>
       @progress = (e.loaded/ e.total)

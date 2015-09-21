@@ -56,9 +56,10 @@ define([
   
   window.external_tool_dialog = {
     ready: function(data) {
-      $("#external_tool_button_dialog:visible").triggerHandler('selection', data);
-      $("#resource_selection_dialog:visible").triggerHandler('selection', data);
-      $("#homework_selection_dialog:visible").triggerHandler('selection', data);
+      var e = jQuery.Event( 'selection' )
+      e.contentItems = data
+      $("#resource_selection_dialog:visible").triggerHandler(e);
+      $("#homework_selection_dialog:visible").triggerHandler(e);
     },
     cancel: function() {
       $("#external_tool_button_dialog").dialog('close');

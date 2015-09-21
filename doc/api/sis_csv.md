@@ -36,6 +36,67 @@ sections and enrollments.
 This option will only affect data created via previous SIS imports. Manually created courses, for
 example, won't be deleted even if they don't appear in the new SIS import.
 
+Diffing Mode
+------------
+
+If your account has a SIS integration that is sending its entire data set on
+each import, rather than just sending what has changed, you can speed up
+the import process by enabling diffing mode. In diffing mode, a
+preprocessing step in Canvas will compare the current SIS import against
+the last successful SIS import with the same *data set identifier*, and
+only apply the difference between the two imports.
+
+For instance, If user A is created by import 1, and then the name is changed for
+user A on import 2, Canvas will apply the new information for user A.
+
+If user B is created by import 1, and then user B is omitted from import 2,
+Canvas will mark the user as deleted.
+
+If user C is created by import 1, and the exact same information
+is specified for user C in import 2, Canvas will mark that nothing has changed
+for that CSV row and skip looking up user C entirely. This can greatly speed
+up SIS imports with thousands of rows that change rarely.
+
+It is important to note that if any SIS data was changed outside of that
+previous CSV import, the changes will not be noticed by the diffing
+code. For example:
+
+  1. Import 1 sets user A state to "active".
+  2. An admin sets user A state to "deleted" either through the Canvas
+     UI, or a non-diff SIS import.
+  3. Import 2 sets user A state to "active" again, and is configured to
+     diff against Import 1.
+  4. Because only the difference between Import 1 and Import 2 is
+     applied, and the user's state is "active" in both CSVs, the user
+     remains deleted.
+
+Diffing mode is enabled by passing the `diffing_data_set_identifier`
+option in the "Import SIS Data" API call. This is a unique, non-changing
+string identifier for the series of SIS imports that will be diffed
+against one another. The string can contain any valid UTF-8, and be up
+to 128 bytes in length. If an account has multiple SIS integrations that
+want to take advantage of diffing, each integration can select a unique
+data set identifier to avoid interfering with each other.
+
+When choosing a data set identifier, it's important to include any
+relevant details to differentiate this data set from other import data
+sets that may come concurrently or later. This might include things such
+as source system, data type, and term id. Some examples of good identifiers:
+
+ * users:fall-2015
+ * source-system-1:all-data:spring-2016
+
+If changes are made to SIS-managed objects outside of the normal import
+process, as in the example given above, it may be necessary to process a SIS
+import with the same data set identifier, but apply the entire import
+rather than applying just the diff.  To enable this mode, set the
+`diffing_remaster_data_set=true` option when creating the import, and it
+will be applied without diffing. The next import for the same data
+set will still diff against that import.
+
+CSV Data Formats
+================
+
 users.csv
 ---------
 
@@ -63,11 +124,30 @@ from the remote system.</td>
 <td>password</td>
 <td>text</td>
 <td><p>If the account is configured to use LDAP or an SSO protocol then
-this isn't needed. Otherwise this is the password that will be used to
+this should not be set. Otherwise this is the password that will be used to
 login to Canvas along with the 'login_id' above.</p>
-<p>If the user already has a password (from previous SIS import or
-otherwise) it will <em>not</em> be overwritten</p></td>
+<p>If the user already has a password (from previous a SIS import or
+otherwise) it will <em>not</em> be overwritten</p>
+<p>Setting the password will in most cases log the user out of Canvas. If 
+the user has managed to change their password in Canvas they will not be 
+affected by this.  This latter case would happen if your institution
+transitioned from using Canvas authentication to a SSO solution.
+For this reason it is important to not set this if you are using LDAP or an 
+SSO protocol.</p>
+</td>
 </tr>
+<tr>
+<td>authentication_provider_id</td>
+<td>text or integer</td>
+<td>
+<p>The authentication provider this login is associated with. Logins
+associated with a specific provider can only be used with that provider.
+Legacy providers (LDAP, CAS, SAML) will search for logins associated with
+them, or unassociated logins. New providers will only search for logins
+explicitly associated with them. This can be the integer ID of the
+provider, or the type of the provider (in which case, it will find the
+first matching provider).</p>
+</td>
 <tr>
 <td>first_name</td>
 <td>text</td>
@@ -119,10 +199,10 @@ student to be able to log in but just not participate, leave the student
 Sample:
 
 <pre>
-user_id,login_id,password,first_name,last_name,short_name,email,status
-01103,bsmith01,,Bob,Smith,Bobby Smith,bob.smith@myschool.edu,active
-13834,jdoe03,,John,Doe,,john.doe@myschool.edu,active
-13aa3,psue01,,Peggy,Sue,,peggy.sue@myschool.edu,active
+user_id,login_id,authentication_provider_id,password,first_name,last_name,short_name,email,status
+01103,bsmith01,,,Bob,Smith,Bobby Smith,bob.smith@myschool.edu,active
+13834,jdoe03,google,,John,Doe,,john.doe@myschool.edu,active
+13aa3,psue01,7,,Peggy,Sue,,peggy.sue@myschool.edu,active
 </pre>
 
 accounts.csv
@@ -208,9 +288,6 @@ interface, this is called the SIS ID.</td>
 <td>The date the term ends. The format should be in ISO 8601: YYYY-MM-DDTHH:MM:SSZ</td>
 </tr>
 </table>
-
-Any account that will have child accounts must be listed in the csv before any child account
-references it.
 
 Sample:
 
@@ -371,8 +448,13 @@ enrollments.csv
 <tr>
 <td>role</td>
 <td>text</td>
-<td><b>Required field</b>. student, teacher, ta, observer, designer, or a custom role defined
+<td><b>Required field if role_id missing</b>. student, teacher, ta, observer, designer, or a custom role defined
 by the account</td>
+</tr>
+<tr>
+<td>role_id</td>
+<td>text</td>
+<td><b>Required field if role missing</b>. Uses a role id, either built-in or defined by the account</td>
 </tr>
 <tr>
 <td>section_id</td>

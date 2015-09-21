@@ -64,6 +64,18 @@ describe Lti::LtiOutboundAdapter do
   let(:lti_user) { LtiOutbound::LTIUser.new }
   let(:lti_tool) { LtiOutbound::LTITool.new }
   let(:lti_assignment) { LtiOutbound::LTIAssignment.new }
+  let(:controller) do
+    request_mock = mock('request')
+    request_mock.stubs(:host).returns('/my/url')
+    request_mock.stubs(:scheme).returns('https')
+    m = mock('controller')
+    m.stubs(:request).returns(request_mock)
+    m.stubs(:logged_in_user).returns(@user || user)
+    m
+  end
+  let(:variable_expander)do
+    Lti::VariableExpander.new(account, context, controller, current_user: user )
+  end
 
   before(:each) do
     Lti::LtiContextCreator.any_instance.stubs(:convert).returns(lti_context)
@@ -76,41 +88,41 @@ describe Lti::LtiOutboundAdapter do
     it "passes the return_url through" do
       LtiOutbound::ToolLaunch.expects(:new).with { |opts| opts[:return_url] == return_url }
 
-      adapter.prepare_tool_launch(return_url)
+      adapter.prepare_tool_launch(return_url, variable_expander)
     end
 
     it "generates the outgoing_email_address" do
       HostUrl.stubs(:outgoing_email_address).returns('email@email.com')
       LtiOutbound::ToolLaunch.expects(:new).with { |opts| opts[:outgoing_email_address] == 'email@email.com' }
 
-      adapter.prepare_tool_launch(return_url)
+      adapter.prepare_tool_launch(return_url, variable_expander)
     end
 
     context "launch url" do
       it "gets the launch url from the tool" do
         LtiOutbound::ToolLaunch.expects(:new).with { |opts| opts[:url] == tool.url }
 
-        adapter.prepare_tool_launch(return_url)
+        adapter.prepare_tool_launch(return_url, variable_expander)
       end
 
       it "gets the launch url from the tool settings when resource_type is specified" do
         tool.expects(:extension_setting).with(resource_type, :url).returns('/resource/launch/url')
         LtiOutbound::ToolLaunch.expects(:new).with { |opts| opts[:url] == '/resource/launch/url' }
 
-        adapter.prepare_tool_launch(return_url, resource_type: resource_type)
+        adapter.prepare_tool_launch(return_url, variable_expander, resource_type: resource_type)
       end
 
       it "passes the launch url through when provided" do
         LtiOutbound::ToolLaunch.expects(:new).with { |opts| opts[:url] == url }
 
-        adapter.prepare_tool_launch(return_url, launch_url: url)
+        adapter.prepare_tool_launch(return_url, variable_expander, launch_url: url)
       end
     end
 
     it "accepts selected html" do
       LtiOutbound::ToolLaunch.expects(:new).with { |opts| opts[:selected_html] == '<div>something</div>' }
 
-      adapter.prepare_tool_launch(return_url, selected_html: '<div>something</div>')
+      adapter.prepare_tool_launch(return_url, variable_expander, selected_html: '<div>something</div>')
     end
 
     context "link code" do
@@ -122,14 +134,14 @@ describe Lti::LtiOutboundAdapter do
 
         LtiOutbound::ToolLaunch.expects(:new).with { |opts| opts[:link_code] == generated_link_code }
 
-        adapter.prepare_tool_launch(return_url)
+        adapter.prepare_tool_launch(return_url, variable_expander)
       end
 
       it "passes the link_code through when provided" do
         link_code = 'link_code'
         LtiOutbound::ToolLaunch.expects(:new).with { |opts| opts[:link_code] == link_code }
 
-        adapter.prepare_tool_launch(return_url, link_code: link_code)
+        adapter.prepare_tool_launch(return_url, variable_expander, link_code: link_code)
       end
     end
 
@@ -137,7 +149,7 @@ describe Lti::LtiOutboundAdapter do
       it "passes the resource_type through when provided" do
         LtiOutbound::ToolLaunch.expects(:new).with { |opts| opts[:resource_type] == :lti_launch_type }
 
-        adapter.prepare_tool_launch(return_url, resource_type: resource_type)
+        adapter.prepare_tool_launch(return_url, variable_expander, resource_type: resource_type)
       end
     end
 
@@ -145,19 +157,19 @@ describe Lti::LtiOutboundAdapter do
       it "creates an lti_context" do
         LtiOutbound::ToolLaunch.expects(:new).with { |options| options[:context] == lti_context }
 
-        adapter.prepare_tool_launch(return_url)
+        adapter.prepare_tool_launch(return_url, variable_expander)
       end
 
       it "creates an lti_user" do
         LtiOutbound::ToolLaunch.expects(:new).with { |options| options[:user] == lti_user }
 
-        adapter.prepare_tool_launch(return_url)
+        adapter.prepare_tool_launch(return_url, variable_expander)
       end
 
       it "creates an lti_tool" do
         LtiOutbound::ToolLaunch.expects(:new).with { |options| options[:tool] == lti_tool }
 
-        adapter.prepare_tool_launch(return_url)
+        adapter.prepare_tool_launch(return_url, variable_expander)
       end
     end
   end
@@ -166,9 +178,9 @@ describe Lti::LtiOutboundAdapter do
     it "returns the launch url from the prepared tool launch" do
       tool_launch = mock('tool launch', url: '/launch/url')
       LtiOutbound::ToolLaunch.stubs(:new).returns(tool_launch)
-      adapter.prepare_tool_launch(return_url)
+      adapter.prepare_tool_launch(return_url, variable_expander)
 
-      adapter.launch_url.should == '/launch/url'
+      expect(adapter.launch_url).to eq '/launch/url'
     end
 
     it "raises a not prepared error if the tool launch has not been prepared" do
@@ -180,9 +192,9 @@ describe Lti::LtiOutboundAdapter do
     it "calls generate on the tool launch" do
       tool_launch = mock('tool launch', generate: {})
       LtiOutbound::ToolLaunch.stubs(:new).returns(tool_launch)
-      adapter.prepare_tool_launch(return_url)
+      adapter.prepare_tool_launch(return_url, variable_expander)
 
-      adapter.generate_post_payload.should == {}
+      expect(adapter.generate_post_payload).to eq({})
     end
 
     it "raises a not prepared error if the tool launch has not been prepared" do
@@ -193,6 +205,7 @@ describe Lti::LtiOutboundAdapter do
   describe "#generate_post_payload_for_assignment" do
     let(:outcome_service_url) { '/outcome/service' }
     let(:legacy_outcome_service_url) { '/legacy/service' }
+    let(:lti_turnitin_outcomes_placement_url) { 'turnitin/outcomes/placement' }
     let(:tool_launch) { stub('tool launch', generate: {}) }
 
     before(:each) do
@@ -200,11 +213,11 @@ describe Lti::LtiOutboundAdapter do
     end
 
     it "creates an lti_assignment" do
-      adapter.prepare_tool_launch(return_url)
+      adapter.prepare_tool_launch(return_url, variable_expander)
 
-      tool_launch.expects(:for_assignment!).with(lti_assignment, outcome_service_url, legacy_outcome_service_url)
+      tool_launch.expects(:for_assignment!).with(lti_assignment, outcome_service_url, legacy_outcome_service_url, lti_turnitin_outcomes_placement_url)
 
-      adapter.generate_post_payload_for_assignment(assignment, outcome_service_url, legacy_outcome_service_url)
+      adapter.generate_post_payload_for_assignment(assignment, outcome_service_url, legacy_outcome_service_url, lti_turnitin_outcomes_placement_url)
     end
 
     it "generates the correct source_id for the assignment" do
@@ -214,16 +227,16 @@ describe Lti::LtiOutboundAdapter do
       tool_launch.stubs(:for_assignment!)
       assignment_creator = mock
       assignment_creator.stubs(:convert).returns(tool_launch)
-      adapter.prepare_tool_launch(return_url)
+      adapter.prepare_tool_launch(return_url, variable_expander)
 
       Lti::LtiAssignmentCreator.expects(:new).with(assignment, source_id).returns(assignment_creator)
 
-      adapter.generate_post_payload_for_assignment(assignment, outcome_service_url, legacy_outcome_service_url)
+      adapter.generate_post_payload_for_assignment(assignment, outcome_service_url, legacy_outcome_service_url, lti_turnitin_outcomes_placement_url)
     end
 
     it "raises a not prepared error if the tool launch has not been prepared" do
       expect {
-        adapter.generate_post_payload_for_assignment(assignment, outcome_service_url, legacy_outcome_service_url)
+        adapter.generate_post_payload_for_assignment(assignment, outcome_service_url, legacy_outcome_service_url, lti_turnitin_outcomes_placement_url)
       }.to raise_error(RuntimeError, 'Called generate_post_payload_for_assignment before calling prepare_tool_launch')
     end
 
@@ -233,7 +246,7 @@ describe Lti::LtiOutboundAdapter do
     it "creates an lti_assignment" do
       tool_launch = mock('tool launch', generate: {})
       LtiOutbound::ToolLaunch.stubs(:new).returns(tool_launch)
-      adapter.prepare_tool_launch(return_url)
+      adapter.prepare_tool_launch(return_url, variable_expander)
 
       tool_launch.expects(:for_homework_submission!).with(lti_assignment)
 
@@ -252,13 +265,13 @@ describe Lti::LtiOutboundAdapter do
       some_class = Class.new
       Lti::LtiOutboundAdapter.consumer_instance_class = some_class
 
-      Lti::LtiOutboundAdapter.consumer_instance_class.should == some_class
+      expect(Lti::LtiOutboundAdapter.consumer_instance_class).to eq some_class
 
       Lti::LtiOutboundAdapter.consumer_instance_class = nil
     end
 
     it "returns the LtiOutbound::LTIConsumerInstance if none defined" do
-      Lti::LtiOutboundAdapter.consumer_instance_class.should == LtiOutbound::LTIConsumerInstance
+      expect(Lti::LtiOutboundAdapter.consumer_instance_class).to eq LtiOutbound::LTIConsumerInstance
     end
   end
 end

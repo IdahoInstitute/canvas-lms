@@ -53,7 +53,7 @@
   .unloaded-id { color: #aaa; }
 </style>
 <% end %>
-<% jammit_css :slickgrid %>
+<% css_bundle :slickgrid %>
 <% js_bundle :jobs %>
 
 <div id="running-wrapper" style="float:left">
@@ -151,7 +151,7 @@
 
 <%
 jobs_opts = {
-  :max_attempts => Delayed::Worker.max_attempts,
+  :max_attempts => Delayed::Settings.max_attempts,
   :flavor => @flavor,
   :url => jobs_url(:only => :jobs),
   :batch_update_url => batch_update_jobs_url,

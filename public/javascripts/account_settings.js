@@ -45,7 +45,7 @@ define([
     $("#add_notification_form .datetime_field").bind('blur change', function() {
       var date = Date.parse($(this).val());
       if(date) {
-        date = date.toString($.datetime.defaultFormat);
+        date = $.datetimeString(date);
       }
       $(this).val(date);
     });
@@ -294,6 +294,9 @@ define([
       $('#self_registration_type_radios').toggle(this.checked);
     }).trigger('change');
 
+    $('#account_settings_global_includes').change(function() {
+      $('#new_styles_sub_account_includes').toggle(this.checked);
+    }).trigger('change');
   });
 
 });

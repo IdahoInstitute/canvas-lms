@@ -28,14 +28,90 @@ describe "Outcome Groups API", type: :request do
   end
 
   def revoke_permission(account_user, permission)
-    RoleOverride.manage_role_override(account_user.account, account_user.membership_type, permission.to_s, :override => false)
+    RoleOverride.manage_role_override(account_user.account, account_user.role, permission.to_s, :override => false)
   end
 
   def create_outcome(opts={})
     group = opts.delete(:group) || @group
     account = opts.delete(:account) || @account
-    outcome = account.created_learning_outcomes.create!({:title => 'new outcome', :vendor_guid => "vendorguid9000"}.merge(opts))
-    group.add_outcome(outcome)
+    @outcome = account.created_learning_outcomes.create!({:title => 'new outcome', :vendor_guid => "vendorguid9000"}.merge(opts))
+    group.add_outcome(@outcome)
+  end
+
+  def add_or_get_rubric(outcome)
+    # This is horribly inefficient, but there's not a good
+    # way to query by learning outcome id because it's stored
+    # in a serialized field :facepalm:.  When we do our outcomes
+    # refactor we should get rid of the serialized field here also
+    #
+    # Don't create a new rubric if one already exists for this outcome
+    Rubric.all.each do |r|
+      return r if r.data.first[:learning_outcome_id] == outcome.id
+    end
+
+    rubric = Rubric.create!(:context => outcome.context)
+    rubric.data = [
+      {
+        :points => 3,
+        :description => "Outcome row",
+        :id => 1,
+        :ratings => [
+          {
+            :points => 3,
+            :description => "Rockin'",
+            :criterion_id => 1,
+            :id => 2
+          },
+          {
+            :points => 0,
+            :description => "Lame",
+            :criterion_id => 1,
+            :id => 3
+          }
+        ],
+        :learning_outcome_id => outcome.id
+      }
+    ]
+    rubric.save!
+    rubric
+  end
+
+  def assess_with(outcome, context, user = nil)
+    assignment = assignment_model(context: context)
+    rubric = add_or_get_rubric(outcome)
+    user ||= user(:active_all => true)
+    context.enroll_student(user) unless context.student_enrollments.exists?(user_id: user.id)
+    a = rubric.associate_with(assignment, context, :purpose => 'grading')
+    assignment.reload
+    submission = assignment.grade_student(user, :grade => "10").first
+    a.assess({
+      :user => user,
+      :assessor => user,
+      :artifact => submission,
+      :assessment => {
+        :assessment_type => 'grading',
+        :criterion_1 => {
+          :points => 2,
+          :comments => "cool, yo"
+        }
+      }
+    })
+    result = outcome.learning_outcome_results.first
+    assessment = a.assess({
+      :user => user,
+      :assessor => user,
+      :artifact => submission,
+      :assessment => {
+        :assessment_type => 'grading',
+        :criterion_1 => {
+          :points => 3,
+          :comments => "cool, yo"
+        }
+      }
+    })
+    result.reload
+    rubric.reload
+    { assignment: assignment, assessment: assessment, rubric: rubric }
   end
 
   describe "redirect" do
@@ -70,7 +146,7 @@ describe "Outcome Groups API", type: :request do
                      :action => 'redirect',
                      :format => 'json')
         assert_status(302)
-        response.location.should == polymorphic_url([:api_v1, :global, :outcome_group], :id => root.id)
+        expect(response.location).to eq polymorphic_url([:api_v1, :global, :outcome_group], :id => root.id)
       end
 
       it "should create the root global group if necessary" do
@@ -81,8 +157,8 @@ describe "Outcome Groups API", type: :request do
                      :format => 'json')
         id = response.location.scan(/\d+$/).first.to_i
         root = LearningOutcomeGroup.global_root_outcome_group
-        root.id.should == id
-        root.should be_active
+        expect(root.id).to eq id
+        expect(root).to be_active
       end
     end
 
@@ -121,7 +197,7 @@ describe "Outcome Groups API", type: :request do
                      :account_id => @account.id.to_s,
                      :format => 'json')
         assert_status(302)
-        response.location.should == polymorphic_url([:api_v1, @account, :outcome_group], :id => root.id)
+        expect(response.location).to eq polymorphic_url([:api_v1, @account, :outcome_group], :id => root.id)
       end
 
       it "should create the root group if necessary" do
@@ -133,8 +209,8 @@ describe "Outcome Groups API", type: :request do
                      :format => 'json')
         id = response.location.scan(/\d+$/).first.to_i
         root = @account.root_outcome_group
-        root.id.should == id
-        root.should be_active
+        expect(root.id).to eq id
+        expect(root).to be_active
       end
     end
 
@@ -148,7 +224,7 @@ describe "Outcome Groups API", type: :request do
                      :course_id => @course.id.to_s,
                      :format => 'json')
         assert_status(302)
-        response.location.should == polymorphic_url([:api_v1, @course, :outcome_group], :id => root.id)
+        expect(response.location).to eq polymorphic_url([:api_v1, @course, :outcome_group], :id => root.id)
       end
     end
   end
@@ -168,32 +244,136 @@ describe "Outcome Groups API", type: :request do
       json = api_call(:get, "/api/v1/accounts/#{@account.id}/outcome_groups",
         controller: 'outcome_groups_api', action: 'index', account_id: @account.id, format: 'json')
       expected_ids = [@account.root_outcome_group, @child_group].map(&:id).sort
-      json.map{|j| j['id']}.sort.should == expected_ids
+      expect(json.map{|j| j['id']}.sort).to eq expected_ids
     end
 
   end
 
   describe "link_index" do
-    before :each do
+    before :once do
       @account = Account.default
       @account_user = @user.account_users.create(:account => @account)
       @group = @account.root_outcome_group
+      @links = 3.times.map{ create_outcome }
     end
 
     it "should return active links" do
-      @links = (1..3).map{ create_outcome }
       link = @links.pop
       link.workflow_state = 'deleted'
       link.save!
 
       json = api_call(:get, "/api/v1/accounts/#{@account.id}/outcome_group_links",
-        controller: 'outcome_groups_api', action: 'link_index', account_id: @account.id, format: 'json')
+                      controller: 'outcome_groups_api',
+                        action: 'link_index',
+                        account_id: @account.id,
+                        format: 'json')
       expected_outcome_ids = @links.map(&:content).map(&:id).sort
       expected_group_ids = @links.map(&:associated_asset).map(&:id).sort
-      json.map {|j| j['outcome']['id']}.sort.should == expected_outcome_ids
-      json.map {|j| j['outcome_group']['id']}.sort.should == expected_group_ids
+      expect(json.map {|j| j['outcome']['id']}.sort).to eq expected_outcome_ids
+      expect(json.map {|j| j['outcome_group']['id']}.sort).to eq expected_group_ids
     end
 
+    it "should return links ordered by id when paginated" do
+      json = api_call(:get, "/api/v1/accounts/#{@account.id}/outcome_group_links?per_page=2",
+                      controller: 'outcome_groups_api',
+                      action: 'link_index',
+                      account_id: @account.id,
+                      per_page: "2",
+                      format: 'json')
+
+      # intentionally not manually sorting either the expected or returned:
+      # - expected should be sorted by id because of creation time
+      # - returned should be sorted by id because of pagination ordering
+      expected_outcome_ids = @links.take(2).map(&:content).map(&:id)
+      expect(json.map {|j| j['outcome']['id']}).to eq expected_outcome_ids
+    end
+
+    context "assessed trait on outcome link object" do
+      let(:check_outcome) do
+        ->(outcome, can_edit) do
+          expect(outcome).to eq({
+            "id" => @outcome.id,
+            "vendor_guid" => @outcome.vendor_guid,
+            "context_type" => @account.class.to_s,
+            "context_id" => @account.id,
+            "title" => @outcome.title.to_s,
+            "display_name" => nil,
+            "url" => api_v1_outcome_path(:id => @outcome.id),
+            "can_edit" => can_edit
+          })
+        end
+      end
+
+      let(:check_outcome_link) do
+        ->(outcome_link, context, group, assessed, can_edit) do
+          expect(outcome_link).to eq({
+            "context_type" => context.class.to_s,
+            "context_id" => context.id,
+            "url" => polymorphic_path([:api_v1, context, :outcome_link], :id => group.id, :outcome_id => @outcome.id),
+            "assessed" => assessed,
+            "outcome_group" => {
+              "id" => group.id,
+              "title" => group.title,
+              "vendor_guid" => group.vendor_guid,
+              "url" => polymorphic_path([:api_v1, context, :outcome_group], :id => group.id),
+              "subgroups_url" => polymorphic_path([:api_v1, context, :outcome_group_subgroups], :id => group.id),
+              "outcomes_url" => polymorphic_path([:api_v1, context, :outcome_group_outcomes], :id => group.id),
+              "can_edit" => can_edit
+            }
+          })
+        end
+      end
+
+      it "outcome is not assessed" do
+        expect(@outcome).not_to be_assessed
+
+        json = api_call(:get, "/api/v1/accounts/#{@account.id}/outcome_group_links",
+                         controller: 'outcome_groups_api',
+                         action: 'link_index',
+                         account_id: @account.id,
+                         format: 'json')
+
+        check_outcome.call(json.last["outcome"], true)
+
+        check_outcome_link.call(
+          json.last.tap{|j| j.delete("outcome")},
+          @account,
+          @group,
+          false,
+          true
+        )
+      end
+
+      it "outcome is assessed" do
+        course_with_teacher(active_all: true)
+        student_in_course(context: @course)
+        @course.root_outcome_group.add_outcome(@outcome)
+        expect(@outcome).not_to be_assessed(@course)
+
+        course_with_teacher(active_all: true)
+        student_in_course(context: @course)
+        @course.root_outcome_group.add_outcome(@outcome)
+        assess_with(@outcome, @course, @student)
+        expect(@outcome).to be_assessed(@course)
+
+        json = api_call(:get, "/api/v1/accounts/#{@account.id}/outcome_group_links",
+                         controller: 'outcome_groups_api',
+                         action: 'link_index',
+                         account_id: @account.id,
+                         format: 'json')
+
+        check_outcome.call(json.last["outcome"], false)
+
+        # Account context should never be assessed
+        check_outcome_link.call(
+          json.last.tap{ |j| j.delete("outcome") },
+          @account,
+          @account.root_outcome_group,
+          false,
+          false
+        )
+      end
+    end
   end
 
   describe "show" do
@@ -241,7 +421,7 @@ describe "Outcome Groups API", type: :request do
                      :action => 'show',
                      :id => group.id.to_s,
                      :format => 'json')
-        json.should == {
+        expect(json).to eq({
           "id" => group.id,
           "title" => group.title,
           "vendor_guid" => group.vendor_guid,
@@ -253,7 +433,7 @@ describe "Outcome Groups API", type: :request do
           "context_id" => nil,
           "context_type" => nil,
           "description" => group.description
-        }
+        })
       end
 
       it "should include parent_outcome_group if non-root" do
@@ -270,7 +450,7 @@ describe "Outcome Groups API", type: :request do
                      :id => group.id.to_s,
                      :format => 'json')
 
-        json.should == {
+        expect(json).to eq({
           "id" => group.id,
           "title" => group.title,
           "vendor_guid" => group.vendor_guid,
@@ -291,7 +471,7 @@ describe "Outcome Groups API", type: :request do
           "context_id" => nil,
           "context_type" => nil,
           "description" => group.description
-        }
+        })
       end
     end
 
@@ -320,7 +500,7 @@ describe "Outcome Groups API", type: :request do
                      :account_id => @account.id.to_s,
                      :id => group.id.to_s,
                      :format => 'json')
-        json.should == {
+        expect(json).to eq({
           "id" => group.id,
           "title" => group.title,
           "vendor_guid" => group.vendor_guid,
@@ -332,7 +512,7 @@ describe "Outcome Groups API", type: :request do
           "context_id" => @account.id,
           "context_type" => "Account",
           "description" => group.description
-        }
+        })
       end
     end
   end
@@ -393,8 +573,8 @@ describe "Outcome Groups API", type: :request do
                  :description => "New Description" })
 
       @group.reload
-      @group.title.should == "New Title"
-      @group.description.should == "New Description"
+      expect(@group.title).to eq "New Title"
+      expect(@group.description).to eq "New Description"
     end
 
     it "should leave alone fields not provided" do
@@ -407,8 +587,8 @@ describe "Outcome Groups API", type: :request do
                { :title => "New Title" })
 
       @group.reload
-      @group.title.should == "New Title"
-      @group.description.should == "Original Description"
+      expect(@group.title).to eq "New Title"
+      expect(@group.description).to eq "Original Description"
     end
 
     it "should allow changing the group's parent" do
@@ -425,9 +605,9 @@ describe "Outcome Groups API", type: :request do
                { :parent_outcome_group_id => groupB.id })
 
       groupC.reload
-      groupC.parent_outcome_group.should == groupB
-      groupA.child_outcome_groups(true).should == []
-      groupB.child_outcome_groups(true).should == [groupC]
+      expect(groupC.parent_outcome_group).to eq groupB
+      expect(groupA.child_outcome_groups(true)).to eq []
+      expect(groupB.child_outcome_groups(true)).to eq [groupC]
     end
 
     it "should fail if changed parentage would create a cycle" do
@@ -467,7 +647,7 @@ describe "Outcome Groups API", type: :request do
                  :vendor_guid => "vendorguid9002"
                })
 
-      json.should == {
+      expect(json).to eq({
         "id" => @group.id,
         "vendor_guid" => "vendorguid9002",
         "title" => "New Title",
@@ -488,7 +668,7 @@ describe "Outcome Groups API", type: :request do
         "context_id" => @account.id,
         "context_type" => "Account",
         "description" => "New Description"
-      }
+      })
     end
   end
 
@@ -544,7 +724,7 @@ describe "Outcome Groups API", type: :request do
                :format => 'json')
 
       @group.reload
-      @group.should be_deleted
+      expect(@group).to be_deleted
     end
 
     it "should return json of the deleted group" do
@@ -555,7 +735,7 @@ describe "Outcome Groups API", type: :request do
                :id => @group.id.to_s,
                :format => 'json')
 
-      json.should == {
+      expect(json).to eq({
         "id" => @group.id,
         "vendor_guid" => @group.vendor_guid,
         "title" => 'subgroup',
@@ -576,7 +756,7 @@ describe "Outcome Groups API", type: :request do
         "context_id" => @account.id,
         "context_type" => "Account",
         "description" => nil
-      }
+      })
     end
   end
 
@@ -595,7 +775,7 @@ describe "Outcome Groups API", type: :request do
                    :account_id => @account.id.to_s,
                    :id => @group.id.to_s,
                    :format => 'json')
-      response.should be_success
+      expect(response).to be_success
     end
 
     it "should return the outcomes linked into the group" do
@@ -606,11 +786,12 @@ describe "Outcome Groups API", type: :request do
                    :account_id => @account.id.to_s,
                    :id => @group.id.to_s,
                    :format => 'json')
-      json.sort_by{ |link| link['outcome']['id'] }.should == @account.created_learning_outcomes.map do |outcome|
+      expect(json.sort_by{ |link| link['outcome']['id'] }).to eq(@account.created_learning_outcomes.map do |outcome|
         {
           "context_type" => "Account",
           "context_id" => @account.id,
           "url" => polymorphic_path([:api_v1, @account, :outcome_link], :id => @group.id, :outcome_id => outcome.id),
+          "assessed" => false,
           "outcome_group" => {
             "id" => @group.id,
             "title" => @group.title,
@@ -631,7 +812,7 @@ describe "Outcome Groups API", type: :request do
             "can_edit" => true
           }
         }
-      end.sort_by{ |link| link['outcome']['id'] }
+      end.sort_by{ |link| link['outcome']['id'] })
     end
 
     it "should not include deleted links" do
@@ -648,8 +829,8 @@ describe "Outcome Groups API", type: :request do
                    :id => @group.id.to_s,
                    :format => 'json')
 
-      json.size.should == 1
-      json.first['outcome']['id'].should == @outcome1.id
+      expect(json.size).to eq 1
+      expect(json.first['outcome']['id']).to eq @outcome1.id
     end
 
     it "should order links by outcome title" do
@@ -660,8 +841,9 @@ describe "Outcome Groups API", type: :request do
                    :account_id => @account.id.to_s,
                    :id => @group.id.to_s,
                    :format => 'json')
-      json.map{ |link| link['outcome']['id'] }.should ==
+      expect(json.map{ |link| link['outcome']['id'] }).to eq(
         [1, 0, 2].map{ |i| @links[i].content_id }
+      )
     end
 
     it "should paginate the links" do
@@ -674,8 +856,8 @@ describe "Outcome Groups API", type: :request do
                    :id => @group.id.to_s,
                    :format => 'json',
                    :per_page => '2')
-      json.size.should eql 2
-      response.headers['Link'].should match(%r{<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=2.*>; rel="next",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=1.*>; rel="first",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=3.*>; rel="last"})
+      expect(json.size).to eql 2
+      expect(response.headers['Link']).to match(%r{<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=2.*>; rel="next",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=1.*>; rel="first",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=3.*>; rel="last"})
 
       json = api_call(:get, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes?per_page=2&page=3",
                    :controller => 'outcome_groups_api',
@@ -685,102 +867,192 @@ describe "Outcome Groups API", type: :request do
                    :format => 'json',
                    :per_page => '2',
                    :page => '3')
-      json.size.should eql 1
-      response.headers['Link'].should match(%r{<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=2.*>; rel="prev",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=1.*>; rel="first",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=3.*>; rel="last"})
+      expect(json.size).to eql 1
+      expect(response.headers['Link']).to match(%r{<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=2.*>; rel="prev",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=1.*>; rel="first",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes\?.*page=3.*>; rel="last"})
+    end
+
+    context "assessed trait on outcome link object" do
+      let(:check_outcome) do
+        ->(outcome) do
+          expect(outcome).to eq({
+            "id" => @outcome.id,
+            "vendor_guid" => @outcome.vendor_guid,
+            "context_type" => @account.class.to_s,
+            "context_id" => @account.id,
+            "title" => @outcome.title.to_s,
+            "display_name" => nil,
+            "url" => api_v1_outcome_path(:id => @outcome.id),
+            "can_edit" => !LearningOutcome.find(@outcome.id).assessed?
+          })
+        end
+      end
+
+      let(:check_outcome_link) do
+        ->(outcome_link, context, group, assessed) do
+          expect(outcome_link).to eq({
+            "context_type" => context.class.to_s,
+            "context_id" => context.id,
+            "url" => polymorphic_path([:api_v1, context, :outcome_link], :id => group.id, :outcome_id => @outcome.id),
+            "assessed" => assessed,
+            "outcome_group" => {
+              "id" => group.id,
+              "title" => group.title,
+              "vendor_guid" => group.vendor_guid,
+              "url" => polymorphic_path([:api_v1, context, :outcome_group], :id => group.id),
+              "subgroups_url" => polymorphic_path([:api_v1, context, :outcome_group_subgroups], :id => group.id),
+              "outcomes_url" => polymorphic_path([:api_v1, context, :outcome_group_outcomes], :id => group.id),
+              "can_edit" => !assessed
+            }
+          })
+        end
+      end
+
+      it "outcome is not assessed" do
+        create_outcome(:title => "Un outcome")
+        expect(@outcome).not_to be_assessed
+
+        json = api_call(
+          :get, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes",
+          :controller => 'outcome_groups_api',
+          :action => 'outcomes',
+          :account_id => @account.id.to_s,
+          :id => @group.id.to_s,
+          :format => 'json'
+        )
+
+        check_outcome.call(json.first["outcome"])
+        check_outcome_link.call(json.first.tap{|j| j.delete("outcome")}, @account, @group, false)
+      end
+
+      it "outcome is assessed" do
+        create_outcome(:title => "Un outcome")
+
+        course_with_teacher(active_all: true)
+        student_in_course(context: @course)
+        @course.root_outcome_group.add_outcome(@outcome)
+        expect(@outcome).not_to be_assessed(@course)
+
+        course_with_teacher(active_all: true)
+        student_in_course(context: @course)
+        @course.root_outcome_group.add_outcome(@outcome)
+        assess_with(@outcome, @course, @student)
+        expect(@outcome).to be_assessed
+
+        json = api_call(
+          :get, "/api/v1/courses/#{@course.id}/outcome_groups/#{@course.root_outcome_group.id}/outcomes",
+          :controller => 'outcome_groups_api',
+          :action => 'outcomes',
+          :course_id => @course.id.to_s,
+          :id => @course.root_outcome_group.id.to_s,
+          :format => 'json'
+        )
+
+        check_outcome.call(json.first["outcome"])
+
+        check_outcome_link.call(
+          json.first.tap{ |j| j.delete("outcome") },
+          @course,
+          @course.root_outcome_group,
+          true
+        )
+      end
     end
   end
 
   describe "link existing" do
-    before :once do
-      @account = Account.default
-      @account_user = @user.account_users.create(:account => @account)
-      @group = @account.root_outcome_group
-      @outcome = LearningOutcome.global.create!(:title => 'subgroup', :vendor_guid => "vendorguid9000")
-    end
+    context "account" do
+      before :once do
+        @account = Account.default
+        @account_user = @user.account_users.create(:account => @account)
+        @group = @account.root_outcome_group
+        @outcome = LearningOutcome.global.create!(:title => 'subgroup', :vendor_guid => "vendorguid9000")
+      end
 
-    it "should require permission" do
-      revoke_permission(@account_user, :manage_outcomes)
-      raw_api_call(:put, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
-                   :controller => 'outcome_groups_api',
-                   :action => 'link',
-                   :account_id => @account.id.to_s,
-                   :id => @group.id.to_s,
-                   :outcome_id => @outcome.id.to_s,
-                   :format => 'json')
-      assert_status(401)
-    end
+      it "should require permission" do
+        revoke_permission(@account_user, :manage_outcomes)
+        raw_api_call(:put, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
+                     :controller => 'outcome_groups_api',
+                     :action => 'link',
+                     :account_id => @account.id.to_s,
+                     :id => @group.id.to_s,
+                     :outcome_id => @outcome.id.to_s,
+                     :format => 'json')
+        assert_status(401)
+      end
 
-    it "should require manage_global_outcomes permission for global groups" do
-      @account_user = @user.account_users.create(:account => Account.site_admin)
-      @group = LearningOutcomeGroup.global_root_outcome_group
-      revoke_permission(@account_user, :manage_global_outcomes)
-      raw_api_call(:put, "/api/v1/global/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
-                   :controller => 'outcome_groups_api',
-                   :action => 'link',
-                   :id => @group.id.to_s,
-                   :outcome_id => @outcome.id.to_s,
-                   :format => 'json')
-      assert_status(401)
-    end
+      it "should require manage_global_outcomes permission for global groups" do
+        @account_user = @user.account_users.create(:account => Account.site_admin)
+        @group = LearningOutcomeGroup.global_root_outcome_group
+        revoke_permission(@account_user, :manage_global_outcomes)
+        raw_api_call(:put, "/api/v1/global/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
+                     :controller => 'outcome_groups_api',
+                     :action => 'link',
+                     :id => @group.id.to_s,
+                     :outcome_id => @outcome.id.to_s,
+                     :format => 'json')
+        assert_status(401)
+      end
 
-    it "should fail if the outcome isn't available to the context" do
-      @subaccount = @account.sub_accounts.create!
-      @outcome = @subaccount.created_learning_outcomes.create!(:title => 'outcome')
-      raw_api_call(:put, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
-                   :controller => 'outcome_groups_api',
-                   :action => 'link',
-                   :account_id => @account.id.to_s,
-                   :id => @group.id.to_s,
-                   :outcome_id => @outcome.id.to_s,
-                   :format => 'json')
-      assert_status(400)
-    end
+      it "should fail if the outcome isn't available to the context" do
+        @subaccount = @account.sub_accounts.create!
+        @outcome = @subaccount.created_learning_outcomes.create!(:title => 'outcome')
+        raw_api_call(:put, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
+                     :controller => 'outcome_groups_api',
+                     :action => 'link',
+                     :account_id => @account.id.to_s,
+                     :id => @group.id.to_s,
+                     :outcome_id => @outcome.id.to_s,
+                     :format => 'json')
+        assert_status(400)
+      end
 
-    it "should link the outcome into the group" do
-      @group.child_outcome_links.should be_empty
-      api_call(:put, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
-                   :controller => 'outcome_groups_api',
-                   :action => 'link',
-                   :account_id => @account.id.to_s,
-                   :id => @group.id.to_s,
-                   :outcome_id => @outcome.id.to_s,
-                   :format => 'json')
-      @group.child_outcome_links(true).size.should == 1
-      @group.child_outcome_links.first.content.should == @outcome
-    end
+      it "should link the outcome into the group" do
+        expect(@group.child_outcome_links).to be_empty
+        api_call(:put, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
+                     :controller => 'outcome_groups_api',
+                     :action => 'link',
+                     :account_id => @account.id.to_s,
+                     :id => @group.id.to_s,
+                     :outcome_id => @outcome.id.to_s,
+                     :format => 'json')
+        expect(@group.child_outcome_links(true).size).to eq 1
+        expect(@group.child_outcome_links.first.content).to eq @outcome
+      end
 
-    it "should return json of the new link" do
-      json = api_call(:put, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
-                   :controller => 'outcome_groups_api',
-                   :action => 'link',
-                   :account_id => @account.id.to_s,
-                   :id => @group.id.to_s,
-                   :outcome_id => @outcome.id.to_s,
-                   :format => 'json')
-      json.should == {
-        "context_type" => "Account",
-        "context_id" => @account.id,
-        "url" => polymorphic_path([:api_v1, @account, :outcome_link], :id => @group.id, :outcome_id => @outcome.id),
-        "outcome_group" => {
-          "id" => @group.id,
-          "title" => @group.title,
-          "vendor_guid" => @group.vendor_guid,
-          "url" => polymorphic_path([:api_v1, @account, :outcome_group], :id => @group.id),
-          "subgroups_url" => polymorphic_path([:api_v1, @account, :outcome_group_subgroups], :id => @group.id),
-          "outcomes_url" => polymorphic_path([:api_v1, @account, :outcome_group_outcomes], :id => @group.id),
-          "can_edit" => true
-        },
-        "outcome" => {
-          "id" => @outcome.id,
-          "vendor_guid" => @outcome.vendor_guid,
-          "context_type" => nil,
-          "context_id" => nil,
-          "title" => @outcome.title,
-          "display_name" => nil,
-          "url" => api_v1_outcome_path(:id => @outcome.id),
-          "can_edit" => false
-        }
-      }
+      it "should return json of the new link" do
+        json = api_call(:put, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
+                     :controller => 'outcome_groups_api',
+                     :action => 'link',
+                     :account_id => @account.id.to_s,
+                     :id => @group.id.to_s,
+                     :outcome_id => @outcome.id.to_s,
+                     :format => 'json')
+        expect(json).to eq({
+          "context_type" => "Account",
+          "context_id" => @account.id,
+          "url" => polymorphic_path([:api_v1, @account, :outcome_link], :id => @group.id, :outcome_id => @outcome.id),
+          "assessed" => false,
+          "outcome_group" => {
+            "id" => @group.id,
+            "title" => @group.title,
+            "vendor_guid" => @group.vendor_guid,
+            "url" => polymorphic_path([:api_v1, @account, :outcome_group], :id => @group.id),
+            "subgroups_url" => polymorphic_path([:api_v1, @account, :outcome_group_subgroups], :id => @group.id),
+            "outcomes_url" => polymorphic_path([:api_v1, @account, :outcome_group_outcomes], :id => @group.id),
+            "can_edit" => true
+          },
+          "outcome" => {
+            "id" => @outcome.id,
+            "vendor_guid" => @outcome.vendor_guid,
+            "context_type" => nil,
+            "context_id" => nil,
+            "title" => @outcome.title,
+            "display_name" => nil,
+            "url" => api_v1_outcome_path(:id => @outcome.id),
+            "can_edit" => false
+          }
+        })
+      end
     end
   end
 
@@ -829,12 +1101,12 @@ describe "Outcome Groups API", type: :request do
                    { :points => 0, :description => "Does Not Meet Expectations" }
                  ]
                })
-      LearningOutcome.active.count.should == 1
+      expect(LearningOutcome.active.count).to eq 1
       @outcome = LearningOutcome.active.first
-      @outcome.title.should == "My Outcome"
-      @outcome.display_name.should == "Friendly Name"
-      @outcome.description.should == "Description of my outcome"
-      @outcome.data[:rubric_criterion].should == {
+      expect(@outcome.title).to eq "My Outcome"
+      expect(@outcome.display_name).to eq "Friendly Name"
+      expect(@outcome.description).to eq "Description of my outcome"
+      expect(@outcome.data[:rubric_criterion]).to eq({
         :description => 'My Outcome',
         :mastery_points => 5,
         :points_possible => 5,
@@ -843,7 +1115,45 @@ describe "Outcome Groups API", type: :request do
           { :points => 3, :description => "Meets Expectations" },
           { :points => 0, :description => "Does Not Meet Expectations" }
         ]
-      }
+      })
+    end
+
+    it "should create a new outcome with default values for mastery calculation" do
+      prev_count = LearningOutcome.active.count
+      json = api_call(:post, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes",
+               { :controller => 'outcome_groups_api',
+                 :action => 'link',
+                 :account_id => @account.id.to_s,
+                 :id => @group.id.to_s,
+                 :format => 'json' },
+               { :title => "My Outcome",
+                 :display_name => "Friendly Name",
+                 :description => "Description of my outcome",
+                 :mastery_points => 5,
+                 :ratings => [
+                   { :points => 5, :description => "Exceeds Expectations" },
+                   { :points => 3, :description => "Meets Expectations" },
+                   { :points => 0, :description => "Does Not Meet Expectations" }
+                 ]
+      })
+
+      expect(LearningOutcome.active.count).to eq(prev_count + 1)
+      @outcome = LearningOutcome.find(json["outcome"]["id"])
+      expect(@outcome.title).to eq "My Outcome"
+      expect(@outcome.display_name).to eq "Friendly Name"
+      expect(@outcome.description).to eq "Description of my outcome"
+      expect(@outcome.data[:rubric_criterion]).to eq({
+        :description => 'My Outcome',
+        :mastery_points => 5,
+        :points_possible => 5,
+        :ratings => [
+          { :points => 5, :description => "Exceeds Expectations" },
+          { :points => 3, :description => "Meets Expectations" },
+          { :points => 0, :description => "Does Not Meet Expectations" }
+        ]
+      })
+      expect(@outcome.calculation_method).to eq("highest")
+      expect(@outcome.calculation_int).to be_nil
     end
 
     it "should link the new outcome into the group" do
@@ -857,8 +1167,126 @@ describe "Outcome Groups API", type: :request do
                { :title => "My Outcome",
                  :description => "Description of my outcome" })
       @outcome = LearningOutcome.active.first
-      @group.child_outcome_links.count.should == 1
-      @group.child_outcome_links.first.content.should == @outcome
+      expect(@group.child_outcome_links.count).to eq 1
+      expect(@group.child_outcome_links.first.content).to eq @outcome
+    end
+
+    context "creating with calculation options specified" do
+      it "should create a new outcome with calculation options specified" do
+        LearningOutcome.update_all(:workflow_state => 'deleted')
+        api_call(:post, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes",
+                 { :controller => 'outcome_groups_api',
+                   :action => 'link',
+                   :account_id => @account.id.to_s,
+                   :id => @group.id.to_s,
+                   :format => 'json' },
+                 { :title => "My Outcome",
+                   :display_name => "Friendly Name",
+                   :description => "Description of my outcome",
+                   :mastery_points => 5,
+                   :ratings => [
+                     { :points => 5, :description => "Exceeds Expectations" },
+                     { :points => 3, :description => "Meets Expectations" },
+                     { :points => 0, :description => "Does Not Meet Expectations" }
+                   ],
+                   :calculation_method => 'n_mastery',
+                   :calculation_int => 4,
+                 })
+        expect(LearningOutcome.active.count).to eq 1
+        @outcome = LearningOutcome.active.first
+        expect(@outcome.title).to eq "My Outcome"
+        expect(@outcome.display_name).to eq "Friendly Name"
+        expect(@outcome.description).to eq "Description of my outcome"
+        expect(@outcome.data[:rubric_criterion]).to eq({
+          :description => 'My Outcome',
+          :mastery_points => 5,
+          :points_possible => 5,
+          :ratings => [
+            { :points => 5, :description => "Exceeds Expectations" },
+            { :points => 3, :description => "Meets Expectations" },
+            { :points => 0, :description => "Does Not Meet Expectations" }
+          ]
+        })
+        expect(@outcome.calculation_method).to eq("n_mastery")
+        expect(@outcome.calculation_int).to eq(4)
+      end
+
+      it "should fail (400) to create a new outcome with illegal calculation options" do
+        LearningOutcome.update_all(:workflow_state => 'deleted')
+        json = api_call(:post, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes",
+                 { :controller => 'outcome_groups_api',
+                   :action => 'link',
+                   :account_id => @account.id.to_s,
+                   :id => @group.id.to_s,
+                   :format => 'json' },
+                 { :title => "My Outcome",
+                   :display_name => "Friendly Name",
+                   :description => "Description of my outcome",
+                   :mastery_points => 5,
+                   :ratings => [
+                     { :points => 5, :description => "Exceeds Expectations" },
+                     { :points => 3, :description => "Meets Expectations" },
+                     { :points => 0, :description => "Does Not Meet Expectations" }
+                   ],
+                   :calculation_method => 'foo bar baz qux',
+                   :calculation_int => 1500,
+                 },
+                 {},
+                 { :expected_status => 400 })
+        expect(LearningOutcome.active.count).to eq 0
+        expect(json).not_to be_nil
+        expect(json["errors"]).not_to be_nil
+        expect(json["errors"]["calculation_method"]).not_to be_nil
+        expect(json["errors"]["calculation_method"][0]).not_to be_nil
+        expect(json["errors"]["calculation_method"][0]["message"]).not_to be_nil
+        expect(json["errors"]["calculation_method"][0]["message"]).to include("calculation_method must be one of")
+      end
+
+      context "should fail (400) to create a new outcome with an illegal calculation_int" do
+        methods = [
+          'decaying_average',
+          'n_mastery',
+          'highest',
+          'latest'
+        ]
+
+        methods.each do |method|
+          it "should fail (400) to create a new outcome with an illegal calculation_int" do
+            LearningOutcome.update_all(:workflow_state => 'deleted')
+            json = api_call(:post, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes",
+                     { :controller => 'outcome_groups_api',
+                       :action => 'link',
+                       :account_id => @account.id.to_s,
+                       :id => @group.id.to_s,
+                       :format => 'json' },
+                     { :title => "My Outcome",
+                       :display_name => "Friendly Name",
+                       :description => "Description of my outcome",
+                       :mastery_points => 5,
+                       :ratings => [
+                         { :points => 5, :description => "Exceeds Expectations" },
+                         { :points => 3, :description => "Meets Expectations" },
+                         { :points => 0, :description => "Does Not Meet Expectations" }
+                       ],
+                       :calculation_method => method,
+                       :calculation_int => 1500,
+                     },
+                     {},
+                     { :expected_status => 400 })
+            expect(LearningOutcome.active.count).to eq 0
+            expect(json).not_to be_nil
+            expect(json["errors"]).not_to be_nil
+            expect(json["errors"]["calculation_int"]).not_to be_nil
+            expect(json["errors"]["calculation_int"][0]).not_to be_nil
+            expect(json["errors"]["calculation_int"][0]["message"]).not_to be_nil
+            if %w[highest latest].include?(method)
+              expect(json["errors"]["calculation_int"][0]["message"]).to include("A calculation value is not used with this calculation method")
+            else
+              expect(json["errors"]["calculation_int"][0]["message"]).to include("not a valid value for this calculation method")
+            end
+          end
+        end
+      end
     end
   end
 
@@ -921,11 +1349,11 @@ describe "Outcome Groups API", type: :request do
                    :format => 'json')
       assert_status(400)
       parsed_body = JSON.parse( response.body )
-      parsed_body[ 'message' ].should =~ /link is the last link/i
+      expect(parsed_body[ 'message' ]).to match /link is the last link/i
     end
 
     it "should unlink the outcome from the group" do
-      @group.child_outcome_links.active.size.should == 1
+      expect(@group.child_outcome_links.active.size).to eq 1
       api_call(:delete, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/outcomes/#{@outcome.id}",
                    :controller => 'outcome_groups_api',
                    :action => 'unlink',
@@ -933,7 +1361,7 @@ describe "Outcome Groups API", type: :request do
                    :id => @group.id.to_s,
                    :outcome_id => @outcome.id.to_s,
                    :format => 'json')
-      @group.child_outcome_links.active.size.should == 0
+      expect(@group.child_outcome_links.active.size).to eq 0
     end
 
     it "should return json of the removed link" do
@@ -944,10 +1372,11 @@ describe "Outcome Groups API", type: :request do
                    :id => @group.id.to_s,
                    :outcome_id => @outcome.id.to_s,
                    :format => 'json')
-      json.should == {
+      expect(json).to eq({
         "context_type" => "Account",
         "context_id" => @account.id,
         "url" => polymorphic_path([:api_v1, @account, :outcome_link], :id => @group.id, :outcome_id => @outcome.id),
+        "assessed" => false,
         "outcome_group" => {
           "id" => @group.id,
           "title" => @group.title,
@@ -967,7 +1396,7 @@ describe "Outcome Groups API", type: :request do
           "url" => api_v1_outcome_path(:id => @outcome.id),
           "can_edit" => false
         }
-      }
+      })
     end
   end
 
@@ -986,7 +1415,7 @@ describe "Outcome Groups API", type: :request do
                    :account_id => @account.id.to_s,
                    :id => @group.id.to_s,
                    :format => 'json')
-      response.should be_success
+      expect(response).to be_success
     end
 
     def create_subgroup(opts={})
@@ -1002,7 +1431,7 @@ describe "Outcome Groups API", type: :request do
                    :account_id => @account.id.to_s,
                    :id => @group.id.to_s,
                    :format => 'json')
-      json.sort_by{ |subgroup| subgroup['id'] }.should == @group.child_outcome_groups.map do |subgroup|
+      expect(json.sort_by{ |subgroup| subgroup['id'] }).to eq(@group.child_outcome_groups.map do |subgroup|
         {
           "id" => subgroup.id,
           "title" => subgroup.title,
@@ -1012,7 +1441,7 @@ describe "Outcome Groups API", type: :request do
           "vendor_guid" => subgroup.vendor_guid,
           "can_edit" => true
         }
-      end.sort_by{ |subgroup| subgroup['id'] }
+      end.sort_by{ |subgroup| subgroup['id'] })
     end
 
     it "should not include deleted subgroups" do
@@ -1027,8 +1456,8 @@ describe "Outcome Groups API", type: :request do
                    :id => @group.id.to_s,
                    :format => 'json')
 
-      json.size.should == 1
-      json.first['id'].should == @subgroup1.id
+      expect(json.size).to eq 1
+      expect(json.first['id']).to eq @subgroup1.id
     end
 
     it "should order subgroups by title" do
@@ -1039,8 +1468,9 @@ describe "Outcome Groups API", type: :request do
                    :account_id => @account.id.to_s,
                    :id => @group.id.to_s,
                    :format => 'json')
-      json.map{ |link| link['id'] }.should ==
+      expect(json.map{ |link| link['id'] }).to eq(
         [1, 0, 2].map{ |i| @subgroups[i].id }
+      )
     end
 
     it "should paginate the subgroups" do
@@ -1053,8 +1483,8 @@ describe "Outcome Groups API", type: :request do
                    :id => @group.id.to_s,
                    :format => 'json',
                    :per_page => '2')
-      json.size.should eql 2
-      response.headers['Link'].should match(%r{<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=2.*>; rel="next",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=1.*>; rel="first",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=3.*>; rel="last"})
+      expect(json.size).to eql 2
+      expect(response.headers['Link']).to match(%r{<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=2.*>; rel="next",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=1.*>; rel="first",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=3.*>; rel="last"})
 
       json = api_call(:get, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups?per_page=2&page=3",
                    :controller => 'outcome_groups_api',
@@ -1064,8 +1494,8 @@ describe "Outcome Groups API", type: :request do
                    :format => 'json',
                    :per_page => '2',
                    :page => '3')
-      json.size.should eql 1
-      response.headers['Link'].should match(%r{<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=2.*>; rel="prev",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=1.*>; rel="first",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=3.*>; rel="last"})
+      expect(json.size).to eql 1
+      expect(response.headers['Link']).to match(%r{<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=2.*>; rel="prev",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=1.*>; rel="first",<.*/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups\?.*page=3.*>; rel="last"})
     end
   end
 
@@ -1100,7 +1530,7 @@ describe "Outcome Groups API", type: :request do
     end
 
     it "should create a new outcome group" do
-      @group.child_outcome_groups.size.should == 0
+      expect(@group.child_outcome_groups.size).to eq 0
       api_call(:post, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@group.id}/subgroups",
                { :controller => 'outcome_groups_api',
                  :action => 'create',
@@ -1109,10 +1539,10 @@ describe "Outcome Groups API", type: :request do
                  :format => 'json' },
                { :title => "My Subgroup",
                  :description => "Description of my subgroup" })
-      @group.child_outcome_groups.active.size.should == 1
+      expect(@group.child_outcome_groups.active.size).to eq 1
       @subgroup = @group.child_outcome_groups.active.first
-      @subgroup.title.should == "My Subgroup"
-      @subgroup.description.should == "Description of my subgroup"
+      expect(@subgroup.title).to eq "My Subgroup"
+      expect(@subgroup.description).to eq "Description of my subgroup"
     end
 
     it "should return json of the new subgroup" do
@@ -1127,7 +1557,7 @@ describe "Outcome Groups API", type: :request do
                  :vendor_guid => "vendorguid9000"
                })
       @subgroup = @group.child_outcome_groups.active.first
-      json.should == {
+      expect(json).to eq({
         "id" => @subgroup.id,
         "title" => @subgroup.title,
         "url" => polymorphic_path([:api_v1, @account, :outcome_group], :id => @subgroup.id),
@@ -1148,7 +1578,7 @@ describe "Outcome Groups API", type: :request do
         "context_type" => "Account",
         "vendor_guid" => "vendorguid9000",
         "description" => @subgroup.description
-      }
+      })
     end
   end
 
@@ -1216,7 +1646,7 @@ describe "Outcome Groups API", type: :request do
     end
 
     it "should create a new outcome group" do
-      @target_group.child_outcome_groups.size.should == 0
+      expect(@target_group.child_outcome_groups.size).to eq 0
       api_call(:post, "/api/v1/accounts/#{@account.id}/outcome_groups/#{@target_group.id}/import",
                    { :controller => 'outcome_groups_api',
                      :action => 'import',
@@ -1224,10 +1654,10 @@ describe "Outcome Groups API", type: :request do
                      :id => @target_group.id.to_s,
                      :format => 'json' },
                    { :source_outcome_group_id => @source_group.id.to_s })
-      @target_group.child_outcome_groups.active.size.should == 1
+      expect(@target_group.child_outcome_groups.active.size).to eq 1
       @subgroup = @target_group.child_outcome_groups.active.first
-      @subgroup.title.should == @source_group.title
-      @subgroup.description.should == @source_group.description
+      expect(@subgroup.title).to eq @source_group.title
+      expect(@subgroup.description).to eq @source_group.description
     end
 
     it "should return json of the new subgroup" do
@@ -1239,7 +1669,7 @@ describe "Outcome Groups API", type: :request do
                      :format => 'json' },
                    { :source_outcome_group_id => @source_group.id.to_s })
       @subgroup = @target_group.child_outcome_groups.active.first
-      json.should == {
+      expect(json).to eq({
         "id" => @subgroup.id,
         "title" => @source_group.title,
         "url" => polymorphic_path([:api_v1, @account, :outcome_group], :id => @subgroup.id),
@@ -1260,7 +1690,7 @@ describe "Outcome Groups API", type: :request do
         "context_type" => "Account",
         "vendor_guid" => @source_group.vendor_guid,
         "description" => @source_group.description
-      }
+      })
     end
   end
 end

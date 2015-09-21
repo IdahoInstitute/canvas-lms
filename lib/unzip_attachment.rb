@@ -88,6 +88,7 @@ class UnzipAttachment
   # Tempfile will unlink its new file as soon as f is garbage collected.
   def process
 
+    Folder.reset_path_lookups!
     with_unzip_configuration do
       zip_stats.validate_against(context)
 
@@ -146,8 +147,7 @@ class UnzipAttachment
     end
 
     if updates.any?
-      sql = "UPDATE attachments SET position=CASE #{updates.join(" ")} ELSE position END WHERE id IN (#{id_positions.keys.join(",")})"
-      Attachment.connection.execute(sql)
+      Attachment.where(id: id_positions.keys).update_all("position=CASE #{updates.join(' ')} ELSE position END")
     end
   end
 

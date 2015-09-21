@@ -1,7 +1,11 @@
 define [
   'jquery'
   'Backbone'
-], ($, Backbone) ->
+  'str/htmlEscape'
+], ($, Backbone, htmlEscape) ->
+  ###
+  xsslint jqueryObject.identifier dragObject current_item
+  ###
 
   class NavigationView extends Backbone.View
 
@@ -47,11 +51,12 @@ define [
       which_list.children('.navitem').each (key, item) ->
         if $(item).attr('aria-label') is which_item.attr('aria-label')
           return
-        options.push('<option value="' + $(item).attr('id') + '">' + $(item).attr('aria-label') + '</option>')
+        options.push('<option value="' + htmlEscape($(item).attr('id')) + '">' + htmlEscape($(item).attr('aria-label')) + '</option>')
       $select = @$move_dialog.children().find('#move_nav_item_select')
       # Clear the options first
+      $('#move_nav_item_form').attr('aria-hidden', 'false')
       $select.empty()
-      $select.append(options.join(''))
+      $select.append($.raw(options.join('')))
       # Set the name in the dialog
       @$move_name.text which_item.attr('aria-label')
       @$move_dialog.data 'current_item', which_item
@@ -74,10 +79,12 @@ define [
         selected_item.before current_item
       if before_or_after is 'after'
         selected_item.after current_item
+      $('#move_nav_item_form').attr('aria-hidden', 'true')
       $('#move_nav_item_form').dialog('close')
       current_item.focus()
 
     cancelMove: ->
+      $('#move_nav_item_form').attr('aria-hidden', 'true')
       $('#move_nav_item_form').dialog('close')
 
     focusKeyboardHelp: (e) ->

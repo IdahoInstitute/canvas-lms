@@ -25,13 +25,14 @@ describe "Importing wikis" do
       it "should import for #{system}" do
         data = get_import_data(system, 'wiki')
         context = get_import_context(system)
+        migration = context.content_migrations.create!
 
-        Importers::WikiPageImporter.import_from_migration(data, context)
-        Importers::WikiPageImporter.import_from_migration(data, context)
-        context.wiki.wiki_pages.count.should == 1
+        Importers::WikiPageImporter.import_from_migration(data, context, migration)
+        Importers::WikiPageImporter.import_from_migration(data, context, migration)
+        expect(context.wiki.wiki_pages.count).to eq 1
 
-        wiki = WikiPage.find_by_migration_id(data[:migration_id])
-        wiki.title.should == data[:title]
+        wiki = WikiPage.where(migration_id: data[:migration_id]).first
+        expect(wiki.title).to eq data[:title]
       end
     end
   end
@@ -39,18 +40,20 @@ describe "Importing wikis" do
   it "should update BB9 wiki page links to the correct url" do
     data = get_import_data('bb9', 'wikis')
     context = get_import_context('bb9')
+    migration = context.content_migrations.create!
     2.times do
       data.each do |wiki|
-        Importers::WikiPageImporter.import_from_migration(wiki, context)
+        Importers::WikiPageImporter.import_from_migration(wiki, context, migration)
       end
     end
-    
+    migration.resolve_content_links!
+
     # The wiki references should resolve to course urls
-    context.wiki.wiki_pages.count.should == 18
-    wiki = WikiPage.find_by_migration_id('res00146')
-    (wiki.body =~ /\/courses\/\d+\/wiki\/course-glossary-a-to-d/).should_not be_nil
-    (wiki.body =~ /\/courses\/\d+\/wiki\/course-glossary-e-f-g-h/).should_not be_nil
-    (wiki.body =~ /\/courses\/\d+\/wiki\/course-glossary-i-j-k-l-m/).should_not be_nil
-    (wiki.body =~ /\/courses\/\d+\/wiki\/course-glossary-n-o-p-q-r/).should_not be_nil
+    expect(context.wiki.wiki_pages.count).to eq 18
+    wiki = WikiPage.where(migration_id: 'res00146').first
+    expect(wiki.body =~ /\/courses\/\d+\/pages\/course-glossary-a-to-d/).not_to be_nil
+    expect(wiki.body =~ /\/courses\/\d+\/pages\/course-glossary-e-f-g-h/).not_to be_nil
+    expect(wiki.body =~ /\/courses\/\d+\/pages\/course-glossary-i-j-k-l-m/).not_to be_nil
+    expect(wiki.body =~ /\/courses\/\d+\/pages\/course-glossary-n-o-p-q-r/).not_to be_nil
   end
 end

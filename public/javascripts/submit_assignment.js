@@ -23,6 +23,7 @@ define([
   'compiled/views/GoogleDocsTreeView',
   'jst/assignments/homework_submission_tool',
   'compiled/external_tools/HomeworkSubmissionLtiContainer',
+  'compiled/views/editor/KeyboardShortcuts' /* TinyMCE Keyboard Shortcuts for a11y */,
   'compiled/jquery.rails_flash_notifications',
   'jquery.ajaxJSON' /* ajaxJSON */,
   'jquery.inst_tree' /* instTree */,
@@ -35,7 +36,7 @@ define([
   'tinymce.editor_box' /* editorBox */,
   'vendor/jquery.scrollTo' /* /\.scrollTo/ */,
   'jqueryui/tabs' /* /\.tabs/ */
-], function(I18n, $, _, GoogleDocsTreeView, homework_submission_tool, HomeworkSubmissionLtiContainer) {
+], function(I18n, $, _, GoogleDocsTreeView, homework_submission_tool, HomeworkSubmissionLtiContainer, RCEKeyboardShortcuts) {
 
   window.submissionAttachmentIndex = -1;
 
@@ -44,6 +45,10 @@ define([
         submissionForm = $('.submit_assignment_form');
 
     var homeworkSubmissionLtiContainer = new HomeworkSubmissionLtiContainer('#submit_from_external_tool_form');
+
+    // Add the Keyboard shortcuts info button
+    var keyboardShortcutsView = new RCEKeyboardShortcuts();
+    keyboardShortcutsView.render().$el.insertBefore($(".switch_text_entry_submission_views:first"));
 
     // grow and shrink the comments box on focus/blur if the user
     // hasn't entered any content.
@@ -97,11 +102,13 @@ define([
         if(ENV.SUBMIT_ASSIGNMENT.ALLOWED_EXTENSIONS.length > 0) {
           var subButton = $(this).find('button[type=submit]');
           var badExt = false;
-          $.each(uploadedAttachmentIds, function(index, id) {
-            var ext = $("#uploaded_files .file_" + id + " .name").text().split('.').pop().toLowerCase();
-            if ($.inArray(ext, ENV.SUBMIT_ASSIGNMENT.ALLOWED_EXTENSIONS) < 0) {
-              badExt = true;
-              $.flashError(I18n.t('#errors.wrong_file_extension', 'The file you selected with extension "%{extension}", is not authorized for submission', {extension: ext}));
+          $.each(uploadedAttachmentIds.split(","), function(index, id) {
+            if (id.length > 0) {
+              var ext = $("#uploaded_files .file_" + id + " .name").text().split('.').pop().toLowerCase();
+              if ($.inArray(ext, ENV.SUBMIT_ASSIGNMENT.ALLOWED_EXTENSIONS) < 0) {
+                badExt = true;
+                $.flashError(I18n.t('#errors.wrong_file_extension', 'The file you selected with extension "%{extension}", is not authorized for submission', {extension: ext}));
+              }
             }
           });
           if(badExt) {
@@ -130,7 +137,7 @@ define([
           url: $(this).attr('action'),
           success: function(data) {
             submitting = true;
-            window.location = window.location.href.replace(window.location.hash, "");
+            window.location = window.location.href.replace(/\#$/g, "").replace(window.location.hash, "");
           },
           error: function(data) {
             submissionForm.find("button[type='submit']").text(I18n.t('messages.submit_failed', "Submit Failed, please try again"));
@@ -152,7 +159,7 @@ define([
       if(hash && hash.indexOf("#submit") == 0) {
         $(".submit_assignment_link").triggerHandler('click', true);
         if(hash == "#submit_google_doc") {
-          $("#submit_assignment_tabs").tabs('select', "#submit_google_doc_form");
+          $("#submit_assignment_tabs").tabs('select', ".google_doc_form");
         }
       }
     });
@@ -175,6 +182,7 @@ define([
       $("html,body").scrollTo($("#submit_assignment"));
       createSubmitAssignmentTabs();
       homeworkSubmissionLtiContainer.loadExternalTools();
+      $("#submit_assignment_tabs li").first().focus();
     });
 
     $(".switch_text_entry_submission_views").click(function(event) {
@@ -203,11 +211,20 @@ define([
             $el = $("#submit_online_text_entry_form textarea:first");
             if (!$el.editorBox('exists?')) { $el.editorBox(); }
           }
+
+          if (ui.newTab.attr("aria-controls") === "submit_google_doc_form") {
+            listGoogleDocs();
+          }
         },
         create: function(event, ui) {
           if (ui.tab.find('a').hasClass('submit_online_text_entry_option')) {
             $el = $("#submit_online_text_entry_form textarea:first");
             if (!$el.editorBox('exists?')) { $el.editorBox(); }
+          }
+
+          //list Google Docs if Google Docs tab is active
+          if (ui.tab.attr("aria-controls") === "submit_google_doc_form") {
+            listGoogleDocs();
           }
         }
       });
@@ -257,19 +274,48 @@ define([
         tree.render();
         tree.on('activate-file', function(file_id){
           $("#submit_google_doc_form").find("input[name='google_doc[document_id]']").val(file_id);
+          var submitButton = $("#submit_google_doc_form").find("[disabled].btn-primary");
+          if(submitButton) {
+            submitButton.removeAttr("disabled")
+          }
         });
 
       }, 'json');
     }
 
-    $(".submit_online_url_option").click(function(event) {
-      if($(this).attr("href") == '#submit_google_doc_form'){
-        listGoogleDocs();
-      }
+    $("#auth-google").live('click', function(e){
+      e.preventDefault();
+      var href = $(this).attr("href");
+      reauth(href);
     });
 
-    //list Google Docs if Google Docs tab is active
-    if(window.location.hash == "#submit_google_doc_form"){
+    // Post message for anybody to listen to //
+    if (window.opener) {
+      window.opener.postMessage({
+        "type": "event",
+        "payload": "done"
+      }, window.opener.location.toString());
+    }
+
+
+    function reauth(auth_url) {
+      var modal = window.open(auth_url, "Authorize Google Docs", 'menubar=no,directories=no,location=no,height=500,width=500');
+      $(window).on("message", function (event){
+        event = event.originalEvent;
+        if(!event || !event.data || event.origin !== window.location.protocol + "//" + window.location.host) return;
+
+        if(event.data.type == "event" && event.data.payload == "done") {
+          if (modal)
+            modal.close();
+
+          reloadGoogleDrive();
+        }
+      });
+    }
+
+    function reloadGoogleDrive() {
+      $("#submit_google_doc_form.auth").hide();
+      $("#submit_google_doc_form.submit_assignment_form").removeClass('hide');
       listGoogleDocs();
     }
 
@@ -291,6 +337,11 @@ define([
   });
 
   $("#submit_google_doc_form").submit(function() {
+    // make sure we have a document selected
+    if (!$("#submit_google_doc_form").find("input[name='google_doc[document_id]']").val()){
+      return false
+    }
+
     $("#uploading_google_doc_message").dialog({
       title: I18n.t('titles.uploading', "Uploading Submission"),
       modal: true,

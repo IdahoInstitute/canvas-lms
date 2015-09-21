@@ -1,6 +1,5 @@
-/** @jsx React.DOM */
 var React = require('react');
-var ModalPortal = require('./ModalPortal');
+var ModalPortal = React.createFactory(require('./ModalPortal'));
 var ariaAppHider = require('../helpers/ariaAppHider');
 var injectCSS = require('../helpers/injectCSS');
 
@@ -50,7 +49,10 @@ var Modal = module.exports = React.createClass({
       ariaAppHider.toggle(props.isOpen, props.appElement);
     }
     sanitizeProps(props);
-    this.portal = React.renderComponent(ModalPortal(props), this.node);
+    if (this.portal)
+      this.portal.setProps(props);
+    else
+      this.portal = React.render(ModalPortal(props), this.node);
   },
 
   render: function () {
@@ -61,4 +63,3 @@ var Modal = module.exports = React.createClass({
 function sanitizeProps(props) {
   delete props.ref;
 }
-

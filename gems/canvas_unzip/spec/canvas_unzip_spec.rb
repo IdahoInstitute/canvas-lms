@@ -54,9 +54,9 @@ describe "CanvasUnzip" do
         Dir.mkdir(subdir)
         warnings = CanvasUnzip.extract_archive(fixture_filename("evil.#{extension}"), subdir)
         expect(warnings[:unsafe].sort).to eq ["../outside.txt", "evil_symlink", "tricky/../../outside.txt"]
-        expect(File.exists?(File.join(tmpdir, 'outside.txt'))).to be false
-        expect(File.exists?(File.join(subdir, 'evil_symlink'))).to be false
-        expect(File.exists?(File.join(subdir, 'inside.txt'))).to be true
+        expect(File.exist?(File.join(tmpdir, 'outside.txt'))).to be false
+        expect(File.exist?(File.join(subdir, 'evil_symlink'))).to be false
+        expect(File.exist?(File.join(subdir, 'inside.txt'))).to be true
       end
     end
 
@@ -95,6 +95,14 @@ describe "CanvasUnzip" do
           CanvasUnzip.extract_archive(fixture_filename("test.zip"), tmpdir, limits)
         end
       }.to raise_error(CanvasUnzip::SizeLimitExceeded)
+    end
+  end
+
+  describe "non-UTF-8 filenames" do
+    it "converts zip filename entries from cp437 to utf-8" do
+      stupid_entry = Zip::Entry.new
+      stupid_entry.name = "mol\x82"
+      expect(CanvasUnzip::Entry.new(stupid_entry).name).to eq('molé')
     end
   end
 

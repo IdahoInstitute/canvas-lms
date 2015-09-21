@@ -91,6 +91,7 @@ class AssignmentOverride < ActiveRecord::Base
   private :touch_assignment
 
   def assignment?; !!assignment_id; end
+
   def quiz?; !!quiz_id; end
 
   workflow do
@@ -122,7 +123,7 @@ class AssignmentOverride < ActiveRecord::Base
       self.assignment_version = assignment.version_number if assignment
     end
 
-    self.title = set.name if set_type != 'ADHOC' && set
+    set_title_if_needed
   end
   protected :default_values
 
@@ -133,14 +134,13 @@ class AssignmentOverride < ActiveRecord::Base
     read_attribute(:set_id)
   end
 
-  def set_with_adhoc
+  def set
     if self.set_type == 'ADHOC'
       assignment_override_students.includes(:user).map(&:user)
     else
-      set_without_adhoc
+      super
     end
   end
-  alias_method_chain :set, :adhoc
 
   def set_id=(id)
     if self.set_type == 'ADHOC'
@@ -169,7 +169,7 @@ class AssignmentOverride < ActiveRecord::Base
       true
     end
 
-    scope "overriding_#{field}", where("#{field}_overridden" => true)
+    scope "overriding_#{field}", -> { where("#{field}_overridden" => true) }
   end
 
   override :due_at
@@ -237,6 +237,28 @@ class AssignmentOverride < ActiveRecord::Base
       self.workflow_state != self.prior_version.workflow_state ||
       self.due_at_overridden != self.prior_version.due_at_overridden ||
       self.due_at_overridden && !Assignment.due_dates_equal?(self.due_at, self.prior_version.due_at))
+  end
+
+  def set_title_if_needed
+
+    if set_type != 'ADHOC' && set
+      self.title = set.name
+    elsif set_type == 'ADHOC' && set.any?
+      self.title ||= title_from_students(set)
+    else
+      self.title ||= "No Title"
+    end
+  end
+
+  def title_from_students(students)
+    return t("No Students") if students.blank?
+    t(:student_count,
+      {
+        one: '%{count} student',
+        other: '%{count} students'
+      },
+      count: students.count
+     )
   end
 
   has_a_broadcast_policy

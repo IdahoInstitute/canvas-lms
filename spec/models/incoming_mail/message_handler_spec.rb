@@ -25,13 +25,18 @@ describe IncomingMail::MessageHandler do
   let(:original_message_id) { 1 }
   let(:secure_id) { "123abc" }
   let(:tag) { "#{secure_id}-#{original_message_id}" }
-    let(:shard) do
+  let(:shard) do
     stub("shard").tap do |shard|
       shard.stubs(:activate).yields
     end
   end
-  let(:user) { stub("user") }
-  let(:context) { stub("context", reply_from: "reply-from@example.com") }
+  let_once(:user) do
+    user_model
+    channel = @user.communication_channels.create!(:path => "lucy@example.com", :path_type => "email")
+    channel.confirm!
+    @user
+  end
+  let(:context) { stub("context") }
 
   let(:original_message_attributes) {
     {
@@ -39,6 +44,8 @@ describe IncomingMail::MessageHandler do
         :shard => shard,
         :context => context,
         :user => user,
+        :global_id => 1,
+        :to => "lucy@example.com"
     }
   }
 
@@ -48,7 +55,9 @@ describe IncomingMail::MessageHandler do
         header: {
             :subject => stub("subject", :charset => "utf8")
         },
-        from: ["lucy@example.com"]
+        from: ["lucy@example.com"],
+        reply_to: ["lucy@example.com"],
+        message_id: 1,
     }
   }
 
@@ -56,23 +65,34 @@ describe IncomingMail::MessageHandler do
   let(:original_message) { stub("original message", original_message_attributes) }
 
   before do
-    IncomingMail::ReplyToAddress.any_instance.stubs(:secure_id).returns(secure_id)
+    Canvas::Security.stubs(:verify_hmac_sha1).returns(true)
   end
 
   describe "#route" do
     it "activates the message's shard" do
-      Message.stubs(:where).with(id: original_message_id).returns(stub(first: original_message))
-      shard.expects(:activate)
+      enable_cache do
+        Message.stubs(:where).with(id: original_message_id).returns(stub(first: original_message))
+        shard.expects(:activate)
 
-      subject.handle(outgoing_from_address, body, html_body, incoming_message, tag)
+        subject.handle(outgoing_from_address, body, html_body, incoming_message, tag)
+      end
     end
 
     it "calls reply from on the message's context" do
-      context.expects(:reply_from)
+      enable_cache do
+        context.expects(:reply_from)
+        Message.stubs(:where).with(id: original_message_id).returns(stub(first: original_message))
+        subject.handle(outgoing_from_address, body, html_body, incoming_message, tag)
+      end
+    end
 
-      Message.stubs(:where).with(id: original_message_id).returns(stub(first: original_message))
-
-      subject.handle(outgoing_from_address, body, html_body, incoming_message, tag)
+    it "is idempotent (via caching)" do
+      enable_cache do
+        context.expects(:reply_from).once
+        Message.stubs(:where).with(id: original_message_id).returns(stub(first: original_message))
+        subject.handle(outgoing_from_address, body, html_body, incoming_message, tag)
+        subject.handle(outgoing_from_address, body, html_body, incoming_message, tag)
+      end
     end
 
     context "when a reply from error occurs" do
@@ -80,7 +100,7 @@ describe IncomingMail::MessageHandler do
         it "silently fails on no message notification id" do
           message = stub("original message without notification id", original_message_attributes.merge(:notification_id => nil))
           Message.stubs(:where).with(id: original_message_id).returns(stub(first: message))
-
+          Rails.cache.expects(:fetch).never
           Mailer.expects(:create_message).never
           message.context.expects(:reply_from).never
 
@@ -88,8 +108,9 @@ describe IncomingMail::MessageHandler do
         end
 
         it "silently fails on invalid secure id" do
-          IncomingMail::ReplyToAddress.any_instance.stubs(:secure_id).returns("deadbeef") # non-matching secure-id
-
+          Message.stubs(:where).with(id: original_message_id).returns(stub(first: original_message))
+          Canvas::Security.stubs(:verify_hmac_sha1).returns(false)
+          Rails.cache.expects(:fetch).never
           Mailer.expects(:create_message).never
           original_message.context.expects(:reply_from).never
 
@@ -99,6 +120,7 @@ describe IncomingMail::MessageHandler do
         it "silently fails if the original message is missing" do
           Message.expects(:where).with(id: 42).returns(stub(first: nil))
           Message.any_instance.expects(:deliver).never
+          Rails.cache.expects(:fetch).never
 
           subject.handle(outgoing_from_address, body, html_body, incoming_message, "#{secure_id}-42")
         end
@@ -106,38 +128,46 @@ describe IncomingMail::MessageHandler do
         it "silently fails if the address tag is invalid" do
           Message.expects(:where).never
           Message.any_instance.expects(:deliver).never
+          Rails.cache.expects(:fetch).never
+
           subject.handle(outgoing_from_address, body, html_body, incoming_message, "#{secure_id}-not-an-id")
+        end
+
+        it "silently fails if the message is not from one of the original recipient's email addresses" do
+          Message.stubs(:where).with(id: original_message_id).returns(stub(first: original_message))
+          Message.any_instance.expects(:deliver).never
+          Rails.cache.expects(:fetch).never
+          original_message.context.expects(:reply_from).never
+          message = stub("incoming message with bad from",
+                         incoming_message_attributes.merge(:from => ['not_lucy@example.com'],
+                                                           :reply_to => ['also_not_lucy@example.com']))
+          subject.handle(outgoing_from_address, body, html_body, message, tag)
         end
       end
 
       context "bounced messages" do
-        it "bounces the message if user is missing" do
+        it "bounces if user is missing" do
           message = stub("original message without user", original_message_attributes.merge(:user => nil))
           Message.stubs(:where).with(id: original_message_id).returns(stub(first: message))
-
-          Message.any_instance.expects(:deliver).never
-          Mailer.expects(:create_message)
-
+          Message.any_instance.expects(:deliver)
+          Rails.cache.expects(:fetch).never
           subject.handle(outgoing_from_address, body, html_body, incoming_message, tag)
         end
 
         it "bounces the message on invalid context" do
           message = stub("original message with invalid context", original_message_attributes.merge({context: stub("context")}))
           Message.stubs(:where).with(id: original_message_id).returns(stub(first: message))
-
-          Message.any_instance.expects(:deliver).never
-          Mailer.expects(:create_message)
+          Rails.cache.expects(:fetch).never
+          Message.any_instance.expects(:save)
+          Message.any_instance.expects(:deliver)
 
           subject.handle(outgoing_from_address, body, html_body, incoming_message, tag)
         end
 
         it "saves and delivers the message with proper input" do
-          user_model
-          channel = @user.communication_channels.create!(:path => "lucy@example.com", :path_type => "email")
-          channel.confirm!
           message = stub("original message with invalid context", original_message_attributes.merge({context: stub("context")}))
           Message.stubs(:where).with(id: original_message_id).returns(stub(first: message))
-
+          Rails.cache.expects(:fetch).never
           Message.any_instance.expects(:save)
           Message.any_instance.expects(:deliver)
 
@@ -147,7 +177,7 @@ describe IncomingMail::MessageHandler do
         it "does not send a message if the incoming message has no from" do
           invalid_incoming_message = stub("invalid incoming message", incoming_message_attributes.merge(from: nil))
           Message.stubs(:where).with(id: original_message_id).returns(stub(first: original_message))
-
+          Rails.cache.expects(:fetch).never
           Message.any_instance.expects(:deliver).never
 
           subject.handle(outgoing_from_address, body, html_body, invalid_incoming_message, tag)
@@ -155,11 +185,11 @@ describe IncomingMail::MessageHandler do
 
         context "with a generic generic_error" do
           it "constructs the message correctly" do
-            message = stub("original message without user", original_message_attributes.merge(:user => nil))
+            message = stub("original message without user", original_message_attributes.merge(:context => nil))
             Message.stubs(:where).with(id: original_message_id).returns(stub(first: message))
 
             email_subject = "Message Reply Failed: some subject"
-            body = <<-BODY.strip_heredoc
+            body = <<-BODY.strip_heredoc.strip
             The message titled "some subject" could not be delivered.  The message was sent to an unknown mailbox address.  If you are trying to contact someone through Canvas you can try logging in to your account and sending them a message using the Inbox tool.
 
             Thank you,
@@ -178,6 +208,7 @@ describe IncomingMail::MessageHandler do
             }
             expected_bounce_message = Message.new(message_attributes)
             Message.expects(:new).with(message_attributes).returns(expected_bounce_message)
+            Rails.cache.expects(:fetch).never
 
             subject.handle(outgoing_from_address, body, html_body, incoming_message, tag)
           end
@@ -189,7 +220,7 @@ describe IncomingMail::MessageHandler do
             context.expects(:reply_from).raises(IncomingMail::Errors::ReplyToLockedTopic.new)
 
             email_subject = "Message Reply Failed: some subject"
-            body = <<-BODY.strip_heredoc
+            body = <<-BODY.strip_heredoc.strip
             The message titled "some subject" could not be delivered because the discussion topic is locked. If you are trying to contact someone through Canvas you can try logging in to your account and sending them a message using the Inbox tool.
 
             Thank you,
@@ -219,7 +250,7 @@ describe IncomingMail::MessageHandler do
             context.expects(:reply_from).raises(IncomingMail::Errors::UnknownAddress.new)
 
             email_subject = "Message Reply Failed: some subject"
-            body = <<-BODY.strip_heredoc
+            body = <<-BODY.strip_heredoc.strip
             The message titled "some subject" could not be delivered.  The message was sent to an unknown mailbox address.  If you are trying to contact someone through Canvas you can try logging in to your account and sending them a message using the Inbox tool.
 
             Thank you,
@@ -246,12 +277,14 @@ describe IncomingMail::MessageHandler do
         context "when there is no communication channel" do
           it "bounces the message back to the incoming from address" do
             Message.stubs(:where).with(id: original_message_id).returns(stub(first: original_message))
-            context.expects(:reply_from).raises(IncomingMail::Errors::ReplyToLockedTopic.new)
 
             Message.any_instance.expects(:deliver).never
             Mailer.expects(:create_message)
 
-            subject.handle(outgoing_from_address, body, html_body, incoming_message, tag)
+            message = stub("incoming message with bad from",
+                           incoming_message_attributes.merge(:from => ['not_lucy@example.com'],
+                                                             :reply_to => ['also_not_lucy@example.com']))
+            subject.handle(outgoing_from_address, body, html_body, message, tag)
           end
         end
       end

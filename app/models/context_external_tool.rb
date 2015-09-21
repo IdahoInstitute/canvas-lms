@@ -22,7 +22,7 @@ class ContextExternalTool < ActiveRecord::Base
   validates_presence_of :config_xml, :if => lambda { |t| t.config_type == "by_xml" }
   validates_length_of :domain, :maximum => 253, :allow_blank => true
   validate :url_or_domain_is_set
-  serialize :settings
+  serialize_utf8_safe :settings
   attr_accessor :config_type, :config_url, :config_xml
 
   before_save :infer_defaults, :validate_vendor_help_link
@@ -46,8 +46,11 @@ class ContextExternalTool < ActiveRecord::Base
     :user_navigation, :course_navigation, :account_navigation, :resource_selection,
     :editor_button, :homework_submission, :migration_selection, :course_home_sub_navigation,
     :course_settings_sub_navigation, :global_navigation,
-    :assignment_menu, :discussion_topic_menu, :module_menu, :quiz_menu, :wiki_page_menu
-  ]
+    :assignment_menu, :file_menu, :discussion_topic_menu, :module_menu, :quiz_menu, :wiki_page_menu,
+    :tool_configuration, :link_selection, :assignment_selection, :post_grades
+  ].freeze
+
+  CUSTOM_EXTENSION_KEYS = {:file_menu => [:accept_media_types].freeze}.freeze
 
   EXTENSION_TYPES.each do |type|
     class_eval <<-RUBY, __FILE__, __LINE__ + 1
@@ -79,6 +82,9 @@ class ContextExternalTool < ActiveRecord::Base
 
     extension_keys = [:custom_fields, :default, :display_type, :enabled, :icon_url,
                       :selection_height, :selection_width, :text, :url, :message_type]
+    if custom_keys = CUSTOM_EXTENSION_KEYS[type]
+      extension_keys += custom_keys
+    end
     extension_keys += {
         :visibility => lambda{|v| %w{members admins}.include?(v)}
     }.to_a
@@ -93,20 +99,25 @@ class ContextExternalTool < ActiveRecord::Base
   end
 
   def has_placement?(type)
-    self.context_external_tool_placements.to_a.any?{|p| p.placement_type == type.to_s}
-  end
-
-  def set_placement!(type, value=true)
-    raise "invalid type" unless EXTENSION_TYPES.include?(type.to_sym)
-    if value
-      self.context_external_tool_placements.new(:placement_type => type.to_s) unless has_placement?(type)
+    if Lti::ResourcePlacement::DEFAULT_PLACEMENTS.include? type.to_s
+      !!(self.selectable && (self.domain || self.url))
     else
-      if self.persisted?
-        self.context_external_tool_placements.for_type(type).delete_all
-      end
-      self.context_external_tool_placements.delete_if{|p| p.placement_type == type.to_s}
+      self.context_external_tool_placements.to_a.any?{|p| p.placement_type == type.to_s}
     end
   end
+
+  def sync_placements!(placements)
+    old_placements = self.context_external_tool_placements.pluck(:placement_type)
+    (placements - old_placements).each do |new_placement|
+      self.context_external_tool_placements.new(:placement_type => new_placement)
+    end
+    placements_to_delete = EXTENSION_TYPES.map(&:to_s) - placements
+    if placements_to_delete.any?
+      self.context_external_tool_placements.where(placement_type: placements_to_delete).delete_all if self.persisted?
+      self.context_external_tool_placements.delete_if{|p| placements_to_delete.include?(p.placement_type)}
+    end
+  end
+  private :sync_placements!
 
   def url_or_domain_is_set
     setting_types = EXTENSION_TYPES
@@ -122,14 +133,20 @@ class ContextExternalTool < ActiveRecord::Base
   end
 
   def label_for(key, lang=nil)
+    lang = lang.to_s if lang
     labels = settings[key] && settings[key][:labels]
-    labels2 = settings[:labels]
     (labels && labels[lang]) ||
       (labels && lang && labels[lang.split('-').first]) ||
       (settings[key] && settings[key][:text]) ||
-      (labels2 && labels2[lang]) ||
-      (labels2 && lang && labels2[lang.split('-').first]) ||
-      settings[:text] || name || "External Tool"
+      default_label(lang)
+  end
+
+  def default_label(lang = nil)
+    lang = lang.to_s if lang
+    default_labels = settings[:labels]
+    (default_labels && default_labels[lang]) ||
+        (default_labels && lang && default_labels[lang.split('-').first]) ||
+        settings[:text] || name || "External Tool"
   end
 
   def check_for_xml_error
@@ -172,7 +189,7 @@ class ContextExternalTool < ActiveRecord::Base
     begin
       value, uri = CanvasHttp.validate_url(self.vendor_help_link)
       self.vendor_help_link = uri.to_s
-    rescue URI::InvalidURIError, ArgumentError
+    rescue URI::Error, ArgumentError
       self.vendor_help_link = nil
     end
   end
@@ -213,7 +230,7 @@ class ContextExternalTool < ActiveRecord::Base
     converter = CC::Importer::BLTIConverter.new
     tool_hash = if config_type == 'by_url'
                   uri = URI.parse(config_url)
-                  raise URI::InvalidURIError unless uri.host && uri.port
+                  raise URI::Error unless uri.host && uri.port
                   converter.retrieve_and_convert_blti_url(config_url)
                 else
                   converter.convert_blti_xml(config_xml)
@@ -228,7 +245,7 @@ class ContextExternalTool < ActiveRecord::Base
     self.name = real_name unless real_name.blank?
   rescue CC::Importer::BLTIConverter::CCImportError => e
     @config_errors << [error_field, e.message]
-  rescue URI::InvalidURIError
+  rescue URI::Error
     @config_errors << [:config_url, "Invalid URL"]
   rescue ActiveRecord::RecordInvalid => e
     @config_errors += Array(e.record.errors)
@@ -306,10 +323,7 @@ class ContextExternalTool < ActiveRecord::Base
     end
   end
 
-  def infer_defaults
-    self.url = nil if url.blank?
-    self.domain = nil if domain.blank?
-
+  def self.normalize_sizes!(settings)
     settings[:selection_width] = settings[:selection_width].to_i if settings[:selection_width]
     settings[:selection_height] = settings[:selection_height].to_i if settings[:selection_height]
 
@@ -319,6 +333,14 @@ class ContextExternalTool < ActiveRecord::Base
         settings[type][:selection_height] = settings[type][:selection_height].to_i if settings[type][:selection_height]
       end
     end
+  end
+
+  def infer_defaults
+    self.url = nil if url.blank?
+    self.domain = nil if domain.blank?
+
+    ContextExternalTool.normalize_sizes!(self.settings)
+
     EXTENSION_TYPES.each do |type|
       if settings[type]
         if !(extension_setting(type, :url)) || (settings[type].has_key?(:enabled) && !settings[type][:enabled])
@@ -329,9 +351,7 @@ class ContextExternalTool < ActiveRecord::Base
 
     settings.delete(:editor_button) if !editor_button(:icon_url)
 
-    EXTENSION_TYPES.each do |type|
-      set_placement!(type, !!settings[type])
-    end
+    sync_placements!(EXTENSION_TYPES.select{|type| !!settings[type]}.map(&:to_s))
     true
   end
 
@@ -445,15 +465,22 @@ class ContextExternalTool < ActiveRecord::Base
       []
     end
   end
-  private_class_method :contexts_to_search
 
   LOR_TYPES = [:course_home_sub_navigation, :course_settings_sub_navigation, :global_navigation,
-               :assignment_menu, :discussion_topic_menu, :module_menu, :quiz_menu, :wiki_page_menu]
+               :assignment_menu, :file_menu, :discussion_topic_menu, :module_menu, :quiz_menu,
+               :wiki_page_menu]
   def self.all_tools_for(context, options={})
-    if LOR_TYPES.include?(options[:type])
-      return [] unless (options[:root_account] && options[:root_account].feature_enabled?(:lor_for_account)) ||
-          (options[:current_user] && options[:current_user].feature_enabled?(:lor_for_user))
+    #options[:type] is deprecated, use options[:placements] instead
+    placements =* options[:placements] || options[:type]
+
+    #special LOR feature flag
+    unless (options[:root_account] && options[:root_account].feature_enabled?(:lor_for_account)) ||
+        (options[:current_user] && options[:current_user].feature_enabled?(:lor_for_user))
+      valid_placements = placements.select{|placement| !LOR_TYPES.include?(placement.to_sym)}
+      return [] if valid_placements.size == 0 && placements.size > 0
+      placements = valid_placements
     end
+
     contexts = []
     if options[:user]
       contexts << options[:user]
@@ -462,9 +489,13 @@ class ContextExternalTool < ActiveRecord::Base
     return nil if contexts.empty?
 
     scope = ContextExternalTool.shard(context.shard).polymorphic_where(context: contexts).active
-    scope = scope.having_setting(options[:type]) if options[:type]
+    scope = scope.placements(*placements)
     scope = scope.selectable if Canvas::Plugin.value_to_boolean(options[:selectable])
-    scope.order(ContextExternalTool.best_unicode_collation_key('name'))
+    scope.order("#{ContextExternalTool.best_unicode_collation_key('context_external_tools.name')}, context_external_tools.id")
+  end
+
+  def self.find_external_tool_by_id(id, context)
+    self.where(:id => id).polymorphic_where(:context => contexts_to_search(context)).first
   end
 
   # Order of precedence: Basic LTI defines precedence as first
@@ -481,7 +512,7 @@ class ContextExternalTool < ActiveRecord::Base
   # the teacher).
   def self.find_external_tool(url, context, preferred_tool_id=nil)
     contexts = contexts_to_search(context)
-    preferred_tool = ContextExternalTool.active.find_by_id(preferred_tool_id) if preferred_tool_id
+    preferred_tool = ContextExternalTool.active.where(id: preferred_tool_id).first if preferred_tool_id
     if preferred_tool && contexts.member?(preferred_tool.context) && preferred_tool.matches_domain?(url)
       return preferred_tool
     end
@@ -515,18 +546,18 @@ class ContextExternalTool < ActiveRecord::Base
       where("context_external_tool_placements.placement_type = ?", setting) : scoped }
 
   scope :placements, lambda { |*placements|
-    if placements
-      module_item_sql = if placements.include? 'module_item'
+    if placements.present?
+      default_placement_sql = if (placements.map(&:to_s) & Lti::ResourcePlacement::DEFAULT_PLACEMENTS).present?
                           "(context_external_tools.not_selectable IS NOT TRUE AND
                            ((COALESCE(context_external_tools.url, '') <> '' ) OR
                            (COALESCE(context_external_tools.domain, '') <> ''))) OR "
                         else
                           ''
                         end
-      where(module_item_sql + 'EXISTS (
-              SELECT * FROM context_external_tool_placements
-              WHERE context_external_tools.id = context_external_tool_placements.context_external_tool_id
-              AND context_external_tool_placements.placement_type IN (?) )', placements || [])
+      return none unless placements
+      where(default_placement_sql + 'EXISTS (?)',
+            ContextExternalToolPlacement.where(placement_type: placements).
+        where("context_external_tools.id = context_external_tool_placements.context_external_tool_id"))
     else
       scoped
     end
@@ -544,14 +575,10 @@ class ContextExternalTool < ActiveRecord::Base
       end
     end
 
+    context = context.context if context.is_a?(Group)
+
     tool = context.context_external_tools.having_setting(type).where(id: id).first
-    if !tool && context.is_a?(Group)
-      context = context.context
-      tool = context.context_external_tools.having_setting(type).where(id: id).first
-    end
-    if !tool
-      tool = ContextExternalTool.having_setting(type).find_by_context_type_and_context_id_and_id('Account', context.account_chain, id)
-    end
+    tool ||= ContextExternalTool.having_setting(type).where(context_type: 'Account', context_id: context.account_chain, id: id).first
     raise ActiveRecord::RecordNotFound if !tool && raise_error
 
     tool
@@ -563,13 +590,14 @@ class ContextExternalTool < ActiveRecord::Base
     if !context.is_a?(Account) && context.respond_to?(:context_external_tools)
       tools += context.context_external_tools.having_setting(type.to_s)
     end
-    tools += ContextExternalTool.having_setting(type.to_s).find_all_by_context_type_and_context_id('Account', context.account_chain)
+    tools += ContextExternalTool.having_setting(type.to_s).where(context_type: 'Account', context_id: context.account_chain)
   end
 
   def self.serialization_excludes; [:shared_secret,:settings]; end
 
   # sets the custom fields from the main tool settings, and any on individual resource type settings
-  def set_custom_fields(hash, resource_type)
+  def set_custom_fields(resource_type)
+    hash = {}
     fields = [settings[:custom_fields] || {}]
     fields << (settings[resource_type.to_sym][:custom_fields] || {}) if resource_type && settings[resource_type.to_sym]
     fields.each do |field_set|
@@ -582,21 +610,7 @@ class ContextExternalTool < ActiveRecord::Base
         end
       end
     end
-  end
-
-  def substituted_custom_fields(placement, substitutions)
-    custom_fields = {}
-    set_custom_fields(custom_fields, placement)
-
-    custom_fields.each do |k,v|
-      if substitutions.has_key?(v)
-        if substitutions[v].respond_to?(:call)
-          custom_fields[k] = substitutions[v].call
-        else
-          custom_fields[k] = substitutions[v]
-        end
-      end
-    end
+    hash
   end
 
   def resource_selection_settings

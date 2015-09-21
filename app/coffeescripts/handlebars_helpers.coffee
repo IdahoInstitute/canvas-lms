@@ -9,31 +9,48 @@ define [
   'compiled/util/semanticDateRange'
   'compiled/util/dateSelect'
   'compiled/util/mimeClass'
-  'compiled/str/convertApiUserContent'
+  'compiled/str/apiUserContent'
   'compiled/str/TextHelper'
   'jquery.instructure_date_and_time'
   'jquery.instructure_misc_helpers'
   'jquery.instructure_misc_plugins'
   'translations/_core_en'
-], (tz, enrollmentName, Handlebars, I18n, $, _, htmlEscape, semanticDateRange, dateSelect, mimeClass, convertApiUserContent, textHelper) ->
+], (tz, enrollmentName, Handlebars, I18n, $, _, htmlEscape, semanticDateRange, dateSelect, mimeClass, apiUserContent, textHelper) ->
 
   Handlebars.registerHelper name, fn for name, fn of {
-    t : (translationKey, defaultValue, options) ->
+    t : (args..., options) ->
       wrappers = {}
       options = options?.hash ? {}
-      scope = options.scope
-      delete options.scope
       for key, value of options when key.match(/^w\d+$/)
         wrappers[new Array(parseInt(key.replace('w', '')) + 2).join('*')] = value
         delete options[key]
       options.wrapper = wrappers if wrappers['*']
-      options.needsEscaping = true
-      options = $.extend(options, this) unless this instanceof String or typeof this is 'string'
-      I18n.scoped(scope).t(translationKey, defaultValue, options)
+      unless this instanceof Window
+        options[key] = this[key] for key in this
+      new Handlebars.SafeString htmlEscape(I18n.t(args..., options))
+
+    __i18nliner_escape: (val) ->
+      htmlEscape val
+
+    __i18nliner_safe: (val) ->
+      new htmlEscape.SafeString(val)
+
+    __i18nliner_concat: (args..., options) ->
+      args.join("")
 
     hiddenIf : (condition) -> " display:none; " if condition
 
     hiddenUnless : (condition) -> " display:none; " unless condition
+
+    hiddenIfExists : (condition) -> " display:none; " if condition?
+
+    hiddenUnlessExists : (condition) -> " display:none; " unless condition?
+
+    ifExists: (condition, options) ->
+      if condition?
+        options.fn @
+      else
+        options.inverse @
 
     semanticDateRange : ->
       new Handlebars.SafeString semanticDateRange arguments...
@@ -43,16 +60,16 @@ define [
       localDatetime = $.datetimeString(datetime)
       titleText = localDatetime
       if ENV and ENV.CONTEXT_TIMEZONE and (ENV.TIMEZONE != ENV.CONTEXT_TIMEZONE)
-        localText = Handlebars.helpers.t('#helpers.local','Local')
-        courseText = Handlebars.helpers.t('#helpers.course', 'Course')
+        localText = I18n.t('#helpers.local','Local')
+        courseText = I18n.t('#helpers.course', 'Course')
         courseDatetime = $.datetimeString(datetime, timezone: ENV.CONTEXT_TIMEZONE)
         if localDatetime != courseDatetime
-          titleText = "#{localText}: #{localDatetime}<br>#{courseText}: #{courseDatetime}"
+          titleText = "#{htmlEscape localText}: #{htmlEscape localDatetime}<br>#{htmlEscape courseText}: #{htmlEscape courseDatetime}"
 
       if justText
         new Handlebars.SafeString titleText
       else
-        new Handlebars.SafeString "data-tooltip title=\"#{titleText}\""
+        new Handlebars.SafeString "data-tooltip data-html-tooltip-title=\"#{htmlEscape titleText}\""
 
     # expects: a Date object or an ISO string
     friendlyDatetime : (datetime, {hash: {pubdate, contextSensitive}}) ->
@@ -63,17 +80,22 @@ define [
       if contextSensitive and ENV and ENV.CONTEXT_TIMEZONE
         timeTitle = Handlebars.helpers.contextSensitiveDatetimeTitle(datetime, hash: {justText: true})
       else
-        timeTitle = $.datetimeString(datetime)
+        timeTitle = htmlEscape $.datetimeString(datetime)
 
-      new Handlebars.SafeString "<time data-tooltip title='#{timeTitle}' datetime='#{datetime.toISOString()}' #{'pubdate' if pubdate}>#{$.friendlyDatetime(fudged)}</time>"
+      new Handlebars.SafeString "<time data-tooltip data-html-tooltip-title='#{htmlEscape timeTitle}' datetime='#{datetime.toISOString()}' #{$.raw('pubdate' if pubdate)}>#{$.friendlyDatetime(fudged)}</time>"
 
 
+    fudge: (datetime) ->
+      $.fudgeDateForProfileTimezone(datetime)
+
+    unfudge: (datetime) ->
+      $.unfudgeDateForProfileTimezone(datetime)
 
     # expects: a Date object or an ISO string
     formattedDate : (datetime, format, {hash: {pubdate}}) ->
       return unless datetime?
       datetime = tz.parse(datetime) unless _.isDate datetime
-      new Handlebars.SafeString "<time data-tooltip title='#{$.datetimeString(datetime)}' datetime='#{datetime.toISOString()}' #{'pubdate' if pubdate}>#{datetime.toString(format)}</time>"
+      new Handlebars.SafeString "<time data-tooltip title='#{$.datetimeString(datetime)}' datetime='#{datetime.toISOString()}' #{$.raw('pubdate' if pubdate)}>#{htmlEscape datetime.toString(format)}</time>"
 
     # IMPORTANT: these next two handlebars helpers emit profile-timezone
     # human-formatted strings. don't send them as is to the server (you can
@@ -82,8 +104,8 @@ define [
     # stored elsewhere).
 
     # expects: anything that $.datetimeString can handle
-    datetimeFormatted : (datetime, localized=true) ->
-      $.datetimeString(datetime, {localized: localized})
+    datetimeFormatted : (datetime) ->
+      $.datetimeString(datetime)
 
     # Strips the time information from the datetime and accounts for the user's
     # timezone preference. expects: anything tz() can handle
@@ -133,12 +155,46 @@ define [
     strftime : (date = '', fmtstr) ->
       I18n.strftime date, fmtstr
 
+    ##
+    # outputs the format preferred for date inputs to prompt KB and SR
+    # users with for interacting with datepickers
+    #
+    # @public
+    #
+    # @param {string} format defaults to 'datetime', if 'date' only returns
+    #   the date portion of the format, same for 'time'
+    #
+    # @returns {String} the format to include for all datepickers
+    accessibleDateFormat: (format='datetime')->
+      if format is 'date'
+        I18n.t "#helpers.accessible_date_only_format", "YYYY-MM-DD"
+      else if format is 'time'
+        I18n.t "#helpers.accessible_time_only_format", "hh:mm"
+      else
+        I18n.t "#helpers.accessible_date_format", "YYYY-MM-DD hh:mm"
+
+    ##
+    # outputs the prompt to include in labels attached to date pickers for
+    # screenreader consumption
+    #
+    # @public
+    #
+    # @param {string} format defaults to 'datetime', if 'date' only returns
+    #   the date portion of the format, same for 'time'
+    #
+    # @returns {String} the prompt for telling SRs about how to
+    #   input a date
+    datepickerScreenreaderPrompt: (format='datetime')->
+      promptText = I18n.t "#helpers.accessible_date_prompt", "Format Like"
+      format = Handlebars.helpers.accessibleDateFormat(format)
+      "#{promptText} #{format}"
+
     mimeClass: mimeClass
 
     # use this method to process any user content fields returned in api responses
     # this is important to handle object/embed tags safely, and to properly display audio/video tags
     convertApiUserContent: (html, {hash}) ->
-      content = convertApiUserContent(html, hash)
+      content = apiUserContent.convert(html, hash)
       # if the content is going to get picked up by tinymce, do not mark as safe
       # because we WANT it to be escaped again.
       content = new Handlebars.SafeString content unless hash and hash.forEditing
@@ -326,11 +382,11 @@ define [
       attributes = for key, val of inputProps when val?
         "#{htmlEscape key}=\"#{htmlEscape val}\""
 
-      hiddenDisabled = if inputProps.disabled then "disabled" else ""
+      hiddenDisabledHtml = if inputProps.disabled then "disabled" else ""
 
       new Handlebars.SafeString """
-        <input name="#{htmlEscape inputProps.name}" type="hidden" value="0" #{hiddenDisabled}>
-        <input #{attributes.join ' '} />
+        <input name="#{htmlEscape inputProps.name}" type="hidden" value="0" #{hiddenDisabledHtml}>
+        <input #{$.raw attributes.join ' '} />
       """
 
     toPercentage: (number) ->
@@ -383,11 +439,14 @@ define [
         'disabled'
       else
         ''
-    truncate_left: ( string, max) ->
-       return textHelper.truncateText( string.split("").reverse().join(""), {max: max}).split("").reverse().join("")
+    truncate_left: ( string, max ) ->
+       return Handlebars.Utils.escapeExpression(textHelper.truncateText(string.split("").reverse().join(""), {max: max}).split("").reverse().join(""))
 
-    truncate: ( string, max) ->
-      return textHelper.truncateText( string, {max: max})
+    truncate: ( string, max ) ->
+      return Handlebars.Utils.escapeExpression(textHelper.truncateText(string, {max: max}))
+
+    escape_html: (string) ->
+      htmlEscape string
 
     enrollmentName: enrollmentName
 
@@ -461,6 +520,24 @@ define [
     or: (args..., options) ->
       for arg in args when arg
         return arg
+
+    # Public: returns icon for outcome mastery level
+    #
+    addMasteryIcon: (status, options={}) ->
+      iconType = {
+        'exceeds': 'check-plus'
+        'mastery': 'check'
+        'near': 'plus'
+      }[status] or 'x'
+      new Handlebars.SafeString "<i aria-hidden='true' class='icon-#{htmlEscape iconType}'></i>"
+
+    # Public: Render `fn` or `inverse` depending on whether firstArg is greater than secondArg
+    #
+    ifGreaterThan: (x, y, options) ->
+      if x > y
+        options.fn @
+      else
+        options.inverse @
 
   }
 

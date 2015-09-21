@@ -19,6 +19,7 @@
 require File.expand_path(File.dirname(__FILE__) + '/../../api_spec_helper')
 
 describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
+
   module Helpers
     def create_question(type, factory_options = {}, quiz=@quiz)
       factory = method(:"#{type}_question_data")
@@ -37,123 +38,173 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
       qq
     end
 
-    def ask_and_answer_stuff
+    def create_question_set
       @qq1 = create_question 'multiple_choice'
       @qq2 = create_question 'true_false'
+      create_answers
+    end
 
+    def create_answers(opts={correct: true})
       @quiz_submission.submission_data = {
-        "question_#{@qq1.id}" => "1658",
-        "question_#{@qq2.id}" => "8950"
+        "question_#{@qq1.id}" => opts[:correct] ? "1658" : "2405",
+        "question_#{@qq2.id}" => opts[:correct] ? "8950" : "8403"
       }
     end
 
     def api_index(data = {}, options = {})
-      helper = method(options[:raw] ? :raw_api_call : :api_call)
-      helper.call(:get,
-        "/api/v1/quiz_submissions/#{@quiz_submission.id}/questions",
-        { :controller => 'quizzes/quiz_submission_questions',
-          :action => 'index',
-          :format => 'json',
-          :quiz_submission_id => @quiz_submission.id.to_s
-        }, data)
+      url = "/api/v1/quiz_submissions/#{@quiz_submission.id}/questions"
+      params = { :controller => 'quizzes/quiz_submission_questions',
+                 :action => 'index',
+                 :format => 'json',
+                 :quiz_submission_id => @quiz_submission.id.to_s,
+                 :quiz_submission_attempt => options[:quiz_submission_attempt]}
+      if options[:raw]
+        raw_api_call(:get, url, params, data)
+      else
+        api_call(:get, url, params, data)
+      end
+
     end
 
     def api_show(data = {}, options = {})
-      helper = method(options[:raw] ? :raw_api_call : :api_call)
-      helper.call(:get,
-        "/api/v1/quiz_submissions/#{@quiz_submission.id}/questions/#{@question[:id]}",
-        { :controller => 'quizzes/quiz_submission_questions',
-          :action => 'show',
-          :format => 'json',
-          :quiz_submission_id => @quiz_submission.id.to_s,
-          :id => @question[:id].to_s
-        }, data)
+      url = "/api/v1/quiz_submissions/#{@quiz_submission.id}/questions/#{@question[:id]}"
+      params = { :controller => 'quizzes/quiz_submission_questions',
+                 :action => 'show',
+                 :format => 'json',
+                 :quiz_submission_id => @quiz_submission.id.to_s,
+                 :id => @question[:id].to_s }
+      if options[:raw]
+        raw_api_call(:get, url, params, data)
+      else
+        api_call(:get, url, params, data)
+      end
     end
 
     def api_answer(data = {}, options = {})
+      url = "/api/v1/quiz_submissions/#{@quiz_submission.id}/questions"
+      params = { :controller => 'quizzes/quiz_submission_questions',
+                 :action => 'answer',
+                 :format => 'json',
+                 :quiz_submission_id => @quiz_submission.id.to_s }
       data = {
         validation_token: @quiz_submission.validation_token,
         attempt: @quiz_submission.attempt
       }.merge(data)
 
-      helper = method(options[:raw] ? :raw_api_call : :api_call)
-      helper.call(:post,
-        "/api/v1/quiz_submissions/#{@quiz_submission.id}/questions",
-        { :controller => 'quizzes/quiz_submission_questions',
-          :action => 'answer',
-          :format => 'json',
-          :quiz_submission_id => @quiz_submission.id.to_s
-        }, data)
+      if options[:raw]
+        raw_api_call(:post, url, params, data)
+      else
+        api_call(:post, url, params, data)
+      end
     end
 
     def api_flag(data = {}, options = {})
+      url = "/api/v1/quiz_submissions/#{@quiz_submission.id}/questions/#{@question[:id]}/flag"
+      params = { :controller => 'quizzes/quiz_submission_questions',
+                 :action => 'flag',
+                 :format => 'json',
+                 :quiz_submission_id => @quiz_submission.id.to_s,
+                 :id => @question[:id].to_s }
       data = {
         validation_token: @quiz_submission.validation_token,
         attempt: @quiz_submission.attempt
       }.merge(data)
 
-      helper = method(options[:raw] ? :raw_api_call : :api_call)
-      helper.call(:put,
-        "/api/v1/quiz_submissions/#{@quiz_submission.id}/questions/#{@question[:id]}/flag",
-        { :controller => 'quizzes/quiz_submission_questions',
-          :action => 'flag',
-          :format => 'json',
-          :quiz_submission_id => @quiz_submission.id.to_s,
-          :id => @question[:id].to_s
-        }, data)
+      if options[:raw]
+        raw_api_call(:put, url, params, data)
+      else
+        api_call(:put, url, params, data)
+      end
     end
 
     def api_unflag(data = {}, options = {})
+      url = "/api/v1/quiz_submissions/#{@quiz_submission.id}/questions/#{@question[:id]}/unflag"
+      params = { :controller => 'quizzes/quiz_submission_questions',
+                 :action => 'unflag',
+                 :format => 'json',
+                 :quiz_submission_id => @quiz_submission.id.to_s,
+                 :id => @question[:id].to_s }
       data = {
         validation_token: @quiz_submission.validation_token,
         attempt: @quiz_submission.attempt
       }.merge(data)
 
-      helper = method(options[:raw] ? :raw_api_call : :api_call)
-      helper.call(:put,
-        "/api/v1/quiz_submissions/#{@quiz_submission.id}/questions/#{@question[:id]}/unflag",
-        { :controller => 'quizzes/quiz_submission_questions',
-          :action => 'unflag',
-          :format => 'json',
-          :quiz_submission_id => @quiz_submission.id.to_s,
-          :id => @question[:id].to_s
-        }, data)
+      if options[:raw]
+        raw_api_call(:put, url, params, data)
+      else
+        api_call(:put, url, params, data)
+      end
     end
   end
 
   include Helpers
 
+
   describe 'GET /quiz_submissions/:quiz_submission_id/questions [index]' do
-    before :each do
+    before :all do
       course_with_student(:active_all => true)
-      @quiz = quiz_model(course: @course)
+      @quiz = @course.quizzes.create!({
+          title: 'test quiz',
+          show_correct_answers: true,
+          show_correct_answers_last_attempt: true,
+          allowed_attempts: 2
+        })
       @quiz_submission = @quiz.generate_submission(@student)
     end
 
-    it 'should be unauthorized' do
+    it 'should be authorized for student' do
       json = api_index({}, { raw: true })
-      assert_status(401)
+      assert_status(200)
     end
 
     it 'should return an empty list' do
-      pending
       json = api_index
-      json.has_key?('quiz_submission_questions').should be_true
-      json['quiz_submission_questions'].size.should == 0
+      expect(json.has_key?('quiz_submission_questions')).to be_truthy
+      expect(json['quiz_submission_questions'].size).to eq 0
     end
 
-    it 'should list all items' do
-      pending
-      ask_and_answer_stuff
+    describe "with data" do
+      before :all do
+        create_question_set
+      end
+      it 'should list all items' do
+        Quizzes::QuizSubmission.any_instance.stubs(:quiz_questions).returns([@qq1,@qq2])
+        json = api_index
+        expect(json['quiz_submission_questions'].size).to eq 2
+      end
 
-      json = api_index
-      json['quiz_submission_questions'].size.should == 2
+      it "should return questions for a previous version of the quiz" do
+        @quiz.generate_quiz_data
+        @quiz.save!
+        @quiz_submission = @quiz.generate_submission(@student)
+        @quiz_submission.complete!(create_answers)
+        @quiz_submission = @quiz.generate_submission(@student)
+        @quiz_submission.complete!(create_answers({correct: false}))
+        json = api_index
+        expect(json['quiz_submission_questions'].map {|q| q['correct']}.all?).to be_falsey
+        json = api_index({}, {quiz_submission_attempt: 2})
+        expect(json['quiz_submission_questions'].map {|q| q['correct']}.all?).to be_truthy
+      end
     end
 
-    it 'should restrict access to itself' do
-      pending
+    it "should deny student access when quiz is OQAAT" do
+      @quiz = @course.quizzes.create!({
+        title: "oqaat quiz",
+        one_question_at_a_time: true
+      })
+      @quiz_submission = @quiz.generate_submission(@student)
+      api_index({}, {raw: true})
+      assert_status(401)
+    end
+
+    it "should allow teacher access even if quiz is OQAAT" do
+      api_index({}, {raw:true})
+      assert_status(200)
+    end
+
+    it "should deny access to another student" do
       student_in_course
-      json = api_index({}, { raw: true })
+      api_index({}, {raw: true})
       assert_status(401)
     end
   end
@@ -164,24 +215,25 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
       @quiz = quiz_model(course: @course)
       @quiz_submission = @quiz.generate_submission(@student)
 
-      ask_and_answer_stuff
+      create_question_set
       @question = @qq1
     end
 
     it 'should be unauthorized' do
+      skip
       json = api_show({}, { raw: true })
       assert_status(401)
     end
 
     it 'should grant access to its student' do
-      pending
+      skip
       json = api_show
-      json.has_key?('quiz_submission_questions').should be_true
-      json['quiz_submission_questions'].length.should == 1
+      expect(json.has_key?('quiz_submission_questions')).to be_truthy
+      expect(json['quiz_submission_questions'].length).to eq 1
     end
 
     it 'should deny access by other students' do
-      pending
+      skip
       student_in_course
       api_show({}, { raw: true })
       assert_status(401)
@@ -189,48 +241,50 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
 
     context 'Output' do
       it 'should include the quiz question id' do
-        pending
+        skip
         json = api_show
-        json.has_key?('quiz_submission_questions').should be_true
-        json['quiz_submission_questions'][0]['id'].should ==
+        expect(json.has_key?('quiz_submission_questions')).to be_truthy
+        expect(json['quiz_submission_questions'][0]['id']).to eq(
           @question.id
+        )
       end
 
       it 'should include the flagged status' do
-        pending
+        skip
         json = api_show
-        json.has_key?('quiz_submission_questions').should be_true
-        json['quiz_submission_questions'][0].has_key?('flagged').should be_true
-        json['quiz_submission_questions'][0]['flagged'].should be_false
+        expect(json.has_key?('quiz_submission_questions')).to be_truthy
+        expect(json['quiz_submission_questions'][0].has_key?('flagged')).to be_truthy
+        expect(json['quiz_submission_questions'][0]['flagged']).to be_falsey
       end
     end
 
     context 'Links' do
       it 'should include its linked quiz_question' do
-        pending
+        skip
         json = api_show({
           :include => %w[ quiz_question ]
         })
 
-        json.has_key?('quiz_submission_questions').should be_true
-        json['quiz_submission_questions'].size.should == 1
+        expect(json.has_key?('quiz_submission_questions')).to be_truthy
+        expect(json['quiz_submission_questions'].size).to eq 1
 
-        json.has_key?('quiz_questions').should be_true
-        json['quiz_questions'].size.should == 1
-        json['quiz_questions'][0]['id'].should ==
+        expect(json.has_key?('quiz_questions')).to be_truthy
+        expect(json['quiz_questions'].size).to eq 1
+        expect(json['quiz_questions'][0]['id']).to eq(
           json['quiz_submission_questions'][0]['id']
+        )
       end
     end
 
     context 'JSON-API compliance' do
       it 'should conform to the JSON-API spec when returning the object' do
-        pending
+        skip
         json = api_show
         assert_jsonapi_compliance(json, 'quiz_submission_questions')
       end
 
       it 'should conform to the JSON-API spec when returning linked objects' do
-        pending
+        skip
         includables = Api::V1::QuizSubmissionQuestion::Includables
 
         json = api_show({
@@ -250,8 +304,8 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
         @quiz_submission = @quiz.generate_submission(@teacher)
 
         json = api_answer
-        json.has_key?('quiz_submission_questions').should be_true
-        json['quiz_submission_questions'].length.should == 0
+        expect(json.has_key?('quiz_submission_questions')).to be_truthy
+        expect(json['quiz_submission_questions'].length).to eq 0
       end
 
       it 'should grant access to its student' do
@@ -260,8 +314,8 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
         @quiz_submission = @quiz.generate_submission(@student)
 
         json = api_answer
-        json.has_key?('quiz_submission_questions').should be_true
-        json['quiz_submission_questions'].length.should == 0
+        expect(json.has_key?('quiz_submission_questions')).to be_truthy
+        expect(json['quiz_submission_questions'].length).to eq 0
       end
     end
 
@@ -270,6 +324,24 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
         course_with_student(:active_all => true)
         @quiz = quiz_model(course: @course)
         @quiz_submission = @quiz.generate_submission(@student)
+      end
+
+      it "shouldn't give any answers information" do
+        mc = create_question 'multiple_choice'
+        formula = create_question 'numerical'
+
+        json = api_answer({
+          quiz_questions: [{
+            id: mc.id,
+            answer: 1658
+          }, {
+            id: formula.id,
+            answer: 40.0
+            }]
+        })
+
+        expect(json['quiz_submission_questions'][0]["answers"].map(&:keys).uniq.include? "weight").to be_falsey
+        expect(json['quiz_submission_questions'][1]["answers"]).to equal(nil)
       end
 
       context 'answering questions' do
@@ -283,9 +355,9 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
             }]
           })
 
-          json['quiz_submission_questions'].should be_present
-          json['quiz_submission_questions'].length.should == 1
-          json['quiz_submission_questions'][0]['answer'].should == 1658
+          expect(json['quiz_submission_questions']).to be_present
+          expect(json['quiz_submission_questions'].length).to eq 1
+          expect(json['quiz_submission_questions'][0]['answer']).to eq '1658'
         end
 
         it 'should answer a TrueFalse question' do
@@ -298,9 +370,9 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
             }]
           })
 
-          json['quiz_submission_questions'].should be_present
-          json['quiz_submission_questions'].length.should == 1
-          json['quiz_submission_questions'][0]['answer'].should == 8403
+          expect(json['quiz_submission_questions']).to be_present
+          expect(json['quiz_submission_questions'].length).to eq 1
+          expect(json['quiz_submission_questions'][0]['answer']).to eq '8403'
         end
 
         it 'should answer a ShortAnswer question' do
@@ -313,9 +385,9 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
             }]
           })
 
-          json['quiz_submission_questions'].should be_present
-          json['quiz_submission_questions'].length.should == 1
-          json['quiz_submission_questions'][0]['answer'].should == 'hello world!'
+          expect(json['quiz_submission_questions']).to be_present
+          expect(json['quiz_submission_questions'].length).to eq 1
+          expect(json['quiz_submission_questions'][0]['answer']).to eq 'hello world!'
         end
 
         it 'should answer a FillInMultipleBlanks question' do
@@ -332,30 +404,44 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
             }]
           })
 
-          json['quiz_submission_questions'].should be_present
-          json['quiz_submission_questions'].length.should == 1
-          json['quiz_submission_questions'][0]['answer'].should == {
+          expect(json['quiz_submission_questions']).to be_present
+          expect(json['quiz_submission_questions'].length).to eq 1
+          expect(json['quiz_submission_questions'][0]['answer']).to eq({
             answer1: 'red',
+            answer2: nil,
             answer3: 'green',
-            answer4: 'blue'
-          }.with_indifferent_access
+            answer4: 'blue',
+            answer5: nil,
+            answer6: nil
+          }.with_indifferent_access)
         end
 
-        it 'should answer a MultipleAnswers question' do
+        it 'should answer a MultipleAnswers question and allow deseleciton' do
           question = create_question 'multiple_answers', {
             answer_parser_compatibility: true
           }
 
-          json = api_answer({
+          first_json = api_answer({
             quiz_questions: [{
               id: question.id,
               answer: [ 9761, 5194 ]
             }]
           })
 
-          json['quiz_submission_questions'].should be_present
-          json['quiz_submission_questions'][0]['answer'].include?(9761).should be_true
-          json['quiz_submission_questions'][0]['answer'].include?(5194).should be_true
+          expect(first_json['quiz_submission_questions']).to be_present
+          expect(first_json['quiz_submission_questions'][0]['answer'].include?('9761')).to be_truthy
+          expect(first_json['quiz_submission_questions'][0]['answer'].include?('5194')).to be_truthy
+
+          second_json = api_answer({
+            quiz_questions: [{
+              id: question.id,
+              answer: []
+            }]
+          })
+
+          expect(second_json['quiz_submission_questions']).to be_present
+          expect(second_json['quiz_submission_questions'][0]['answer'].include?('9761')).to be_falsey
+          expect(second_json['quiz_submission_questions'][0]['answer'].include?('5194')).to be_falsey
         end
 
         it 'should answer an Essay question' do
@@ -368,8 +454,8 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
             }]
           })
 
-          json['quiz_submission_questions'].should be_present
-          json['quiz_submission_questions'][0]['answer'].should == 'Foobar'
+          expect(json['quiz_submission_questions']).to be_present
+          expect(json['quiz_submission_questions'][0]['answer']).to eq 'Foobar'
         end
 
         it 'should answer a MultipleDropdowns question' do
@@ -385,11 +471,18 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
             }]
           })
 
-          json['quiz_submission_questions'].should be_present
-          json['quiz_submission_questions'][0]['answer'].should == {
-            structure1: 4390,
-            event2: 599
-          }.with_indifferent_access
+          expect(json['quiz_submission_questions']).to be_present
+          expect(json['quiz_submission_questions'][0]['answer']).to eq({
+            structure1: '4390',
+            structure2: nil,
+            structure3: nil,
+            structure4: nil,
+            structure5: nil,
+            structure6: nil,
+            structure7: nil,
+            event1: nil,
+            event2: '599'
+          }.with_indifferent_access)
         end
 
         it 'should answer a Matching question' do
@@ -407,16 +500,16 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
             }]
           })
 
-          json['quiz_submission_questions'].should be_present
+          expect(json['quiz_submission_questions']).to be_present
 
           answer = json['quiz_submission_questions'][0]['answer']
-          answer
-            .include?({ answer_id: 7396, match_id: 6061 }.with_indifferent_access)
-            .should be_true
+          expect(answer
+            .include?({ answer_id: '7396', match_id: '6061' }.with_indifferent_access))
+            .to be_truthy
 
-          answer
-            .include?({ answer_id: 4224, match_id: 3855 }.with_indifferent_access)
-            .should be_true
+          expect(answer
+            .include?({ answer_id: '4224', match_id: '3855' }.with_indifferent_access))
+            .to be_truthy
         end
 
         it 'should answer a Numerical question' do
@@ -429,8 +522,8 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
             }]
           })
 
-          json['quiz_submission_questions'].should be_present
-          json['quiz_submission_questions'][0]['answer'].should == 0.0025
+          expect(json['quiz_submission_questions']).to be_present
+          expect(json['quiz_submission_questions'][0]['answer']).to eq 0.0025
         end
 
         it 'should answer a Calculated question' do
@@ -443,8 +536,8 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
             }]
           })
 
-          json['quiz_submission_questions'].should be_present
-          json['quiz_submission_questions'][0]['answer'].should == 122.1
+          expect(json['quiz_submission_questions']).to be_present
+          expect(json['quiz_submission_questions'][0]['answer']).to eq 122.1
         end
       end
 
@@ -458,9 +551,9 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
           }]
         })
 
-        json['quiz_submission_questions'].should be_present
-        json['quiz_submission_questions'].length.should == 1
-        json['quiz_submission_questions'][0]['answer'].should == 1658
+        expect(json['quiz_submission_questions']).to be_present
+        expect(json['quiz_submission_questions'].length).to eq 1
+        expect(json['quiz_submission_questions'][0]['answer']).to eq '1658'
 
         json = api_answer({
           quiz_questions: [{
@@ -469,9 +562,9 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
           }]
         })
 
-        json['quiz_submission_questions'].should be_present
-        json['quiz_submission_questions'].length.should == 1
-        json['quiz_submission_questions'][0]['answer'].should == 2405
+        expect(json['quiz_submission_questions']).to be_present
+        expect(json['quiz_submission_questions'].length).to eq 1
+        expect(json['quiz_submission_questions'][0]['answer']).to eq '2405'
       end
 
       it 'should answer according to the published state of the question' do
@@ -492,7 +585,7 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
         }, { raw: true })
 
         assert_status(400)
-        response.body.should match(/unknown answer '1658'/i)
+        expect(response.body).to match(/unknown answer '1658'/i)
 
         json = api_answer({
           quiz_questions: [{
@@ -501,9 +594,9 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
           }]
         })
 
-        json['quiz_submission_questions'].should be_present
-        json['quiz_submission_questions'].length.should == 1
-        json['quiz_submission_questions'][0]['answer'].should == 1659
+        expect(json['quiz_submission_questions']).to be_present
+        expect(json['quiz_submission_questions'].length).to eq 1
+        expect(json['quiz_submission_questions'][0]['answer']).to eq '1659'
       end
 
       it 'should present errors' do
@@ -517,7 +610,7 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
         }, { raw: true })
 
         assert_status(400)
-        response.body.should match(/must be of type integer/i)
+        expect(response.body).to match(/must be of type integer/i)
       end
 
       # This is duplicated from QuizSubmissionsApiController spec and will be
@@ -546,7 +639,7 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
         }, { raw: true })
 
         assert_status(403)
-        response.body.should match(/requires the lockdown browser/i)
+        expect(response.body).to match(/requires the lockdown browser/i)
       end
 
       it 'should support answering multiple questions at the same time' do
@@ -563,15 +656,15 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
           }]
         })
 
-        json['quiz_submission_questions'].should be_present
-        json['quiz_submission_questions'].length.should == 2
-        json['quiz_submission_questions'].detect do |q|
+        expect(json['quiz_submission_questions']).to be_present
+        expect(json['quiz_submission_questions'].length).to eq 2
+        expect(json['quiz_submission_questions'].detect do |q|
           q['id'] == question1.id
-        end['answer'].should == 1658
+        end['answer']).to eq '1658'
 
-        json['quiz_submission_questions'].detect do |q|
+        expect(json['quiz_submission_questions'].detect do |q|
           q['id'] == question2.id
-        end['answer'].should == 0.0025
+        end['answer']).to eq 0.0025
       end
     end
   end
@@ -588,9 +681,16 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
 
       json = api_flag
 
-      json['quiz_submission_questions'].should be_present
-      json['quiz_submission_questions'].length.should == 1
-      json['quiz_submission_questions'][0]['flagged'].should == true
+      expect(json['quiz_submission_questions']).to be_present
+      expect(json['quiz_submission_questions'].length).to eq 1
+      expect(json['quiz_submission_questions'][0]['flagged']).to eq true
+    end
+
+    it "should prevent unauthorized flagging" do
+      @question = create_question('multiple_choice')
+      student_in_course
+      api_flag({}, {raw: true})
+      assert_status(403)
     end
   end
 
@@ -606,9 +706,16 @@ describe Quizzes::QuizSubmissionQuestionsController, :type => :request do
 
       json = api_unflag
 
-      json['quiz_submission_questions'].should be_present
-      json['quiz_submission_questions'].length.should == 1
-      json['quiz_submission_questions'][0]['flagged'].should == false
+      expect(json['quiz_submission_questions']).to be_present
+      expect(json['quiz_submission_questions'].length).to eq 1
+      expect(json['quiz_submission_questions'][0]['flagged']).to eq false
+    end
+
+    it "should prevent unauthorized unflagging" do
+      @question = create_question('multiple_choice')
+      student_in_course
+      api_unflag({}, {raw: true})
+      assert_status(403)
     end
   end
 end

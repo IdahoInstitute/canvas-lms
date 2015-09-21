@@ -1,25 +1,18 @@
 define [
+  'i18n!react_files'
   'react'
-  'compiled/react/shared/utils/withReactDOM'
+  'compiled/react/shared/utils/withReactElement'
   '../modules/FileUploader'
-  './ProgressBar'
-], (React, withReactDOM, FileUploader, ProgressBar) ->
+], (I18n, React, withReactElement, FileUploader) ->
 
-  UploadProgress = React.createClass
+
+  UploadProgress =
     displayName: 'UploadProgress'
 
     propTypes:
-      uploader: React.PropTypes.instanceOf(FileUploader).isRequired
-
-    getLabel: withReactDOM ->
-      span {},
-        i className: 'icon-document'
-        span ref: 'fileName', @props.uploader.getFileName()
-
-    render: withReactDOM ->
-      progress = @props.uploader.roundProgress()
-      div className: 'upload-progress-view',
-        div className: 'upload-progress-view__label',
-          div {},
-            @getLabel()
-        ProgressBar progress: progress
+      uploader: React.PropTypes.shape({
+        getFileName: React.PropTypes.func.isRequired
+        roundProgress: React.PropTypes.func.isRequired
+        cancel: React.PropTypes.func.isRequired
+        file: React.PropTypes.instanceOf(File).isRequired
+      })

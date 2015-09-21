@@ -67,7 +67,11 @@ module HtmlTextHelper
            when 'img'
              src = node['src']
              if src
-               src = URI.join(opts[:base_url], src) if opts[:base_url]
+               begin
+                 src = URI.join(opts[:base_url], src) if opts[:base_url]
+               rescue URI::Error
+                 # do nothing, let src pass through as is
+               end
                node['alt'] ? "[#{node['alt']}](#{src})" : src
              else
                ''
@@ -80,7 +84,11 @@ module HtmlTextHelper
              when 'a'
                href = node['href']
                if href
-                 href = URI.join(opts[:base_url], href) if opts[:base_url]
+                 begin
+                   href = URI.join(opts[:base_url], href) if opts[:base_url]
+                 rescue URI::Error
+                   # do nothing, let href pass through as is
+                 end
                  href == subtext ? subtext : "[#{subtext}](#{href})"
                else
                  subtext
@@ -106,9 +114,13 @@ module HtmlTextHelper
   # like so
   # *******
   def banner(text, opts={})
+    return text if text.empty?
+
+    char = opts.fetch(:char, '*')
     text_width = text.lines.map{|l| l.strip.length}.max
     text_width = [text_width, opts[:line_width]].min if opts[:line_width]
-    line = opts[:char] * text_width
+    line = char * text_width
+
     (opts[:underline] ? '' : line + "\n") + text + "\n" + line
   end
 

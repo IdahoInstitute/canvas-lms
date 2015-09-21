@@ -16,6 +16,8 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
+require 'aws-sdk'
+
 class DeveloperKey < ActiveRecord::Base
   include CustomValidations
 
@@ -43,6 +45,12 @@ class DeveloperKey < ActiveRecord::Base
 
   def self.default
     get_special_key("User-Generated")
+  end
+
+  def authorized_for_account?(target_account)
+    return true unless account_id
+    account_ids = target_account.account_chain.map{|acct| acct.global_id}
+    account_ids.include? account.global_id
   end
 
   def account_name
@@ -76,7 +84,7 @@ class DeveloperKey < ActiveRecord::Base
     self_domain = URI.parse(self.redirect_uri).host
     other_domain = URI.parse(redirect_uri).host
     return self_domain.present? && other_domain.present? && (self_domain == other_domain || other_domain.end_with?(".#{self_domain}"))
-  rescue URI::InvalidURIError
+  rescue URI::Error
     return false
   end
 

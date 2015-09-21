@@ -18,6 +18,7 @@
 
 require 'fileutils'
 require File.expand_path('../configurable_timeout', __FILE__)
+require 'zlib'
 
 module IncomingMailProcessor
   
@@ -42,8 +43,10 @@ module IncomingMailProcessor
       # nothing to do    
     end
 
-    def each_message
-      files_in_folder(folder).each do |filename|
+    def each_message(opts={})
+      filenames = files_in_folder(folder)
+      filenames = filenames.select{|filename| Zlib.crc32(filename) % opts[:stride] == opts[:offset]} if opts[:stride] && opts[:offset]
+      filenames.each do |filename|
         if file?(folder, filename)
           body = read_file(folder, filename)
           yield filename, body
@@ -60,6 +63,11 @@ module IncomingMailProcessor
         create_folder(folder, target_folder)
       end
       move_file(folder, filename, target_folder)
+    end
+
+    def unprocessed_message_count
+      # not implemented, and used only for performance monitoring.
+      nil
     end
 
   private

@@ -4,21 +4,28 @@ define [
   'underscore'
   'react'
   'react-router'
-  './BreadcrumbCollapsedContainer'
-  'compiled/react/shared/utils/withReactDOM'
+  'jsx/files/BreadcrumbCollapsedContainer'
+  'compiled/react/shared/utils/withReactElement'
   '../modules/customPropTypes'
-], (I18n, $, _, React, {Link}, BreadcrumbCollapsedContainer, withReactDOM, customPropTypes) ->
+], (I18n, $, _, React, ReactRouter, BreadcrumbCollapsedContainerComponent, withReactElement, customPropTypes) ->
 
-  Breadcrumbs = React.createClass
+  MAX_CRUMB_WIDTH = 500
+  MIN_CRUMB_WIDTH = if window.ENV.use_new_styles then 80 else 40
+
+  Link =   ReactRouter.Link
+  BreadcrumbCollapsedContainer =   BreadcrumbCollapsedContainerComponent
+
+  Breadcrumbs =
     displayName: 'Breadcrumbs'
 
     propTypes:
-      rootTillCurrentFolder: React.PropTypes.arrayOf(customPropTypes.folder).isRequired
+      rootTillCurrentFolder: React.PropTypes.arrayOf(customPropTypes.folder)
+
+    mixins: [ReactRouter.State]
 
     getInitialState: ->
       {
-        minCrumbWidth: 40
-        maxCrumbWidth: 500
+        maxCrumbWidth: MAX_CRUMB_WIDTH
         availableWidth: 200000
       }
 
@@ -43,8 +50,10 @@ define [
       $a = $oldCrumbs.find('li').eq(1).find('a')
       contextUrl = $a.attr('href')
       contextName = $a.text()
-      $oldCrumbs.remove()
-
+      if (ENV.use_new_styles)
+        $('.ic-app-nav-toggle-and-crumbs').remove()
+      else
+        $oldCrumbs.remove()
       @setState({homeName, contextUrl, contextName, heightOfOneBreadcrumb})
 
     handleResize: ->
@@ -53,7 +62,7 @@ define [
     startRecalculating: (newAvailableWidth) ->
       @setState({
         availableWidth: newAvailableWidth
-        maxCrumbWidth: 500
+        maxCrumbWidth: MAX_CRUMB_WIDTH
       }, @checkIfCrumbsFit)
 
     componentWillReceiveProps: -> setTimeout(@startRecalculating)
@@ -61,73 +70,6 @@ define [
     checkIfCrumbsFit: ->
       return unless @state.heightOfOneBreadcrumb
       breadcrumbHeight = $(@refs.breadcrumbs.getDOMNode()).height()
-      if (breadcrumbHeight > @state.heightOfOneBreadcrumb) and (@state.maxCrumbWidth > @state.minCrumbWidth)
-        maxCrumbWidth = Math.max(@state.minCrumbWidth, @state.maxCrumbWidth - 20)
+      if (breadcrumbHeight > @state.heightOfOneBreadcrumb) and (@state.maxCrumbWidth > MIN_CRUMB_WIDTH)
+        maxCrumbWidth = Math.max(MIN_CRUMB_WIDTH, @state.maxCrumbWidth - 20)
         @setState({maxCrumbWidth}, @checkIfCrumbsFit)
-
-    renderSingleCrumb: (folder, isLastCrumb, isRootCrumb) ->
-      name = if isRootCrumb then I18n.t('files', 'Files') else folder.get('name')
-
-      li {},
-        Link {
-          to: (if isRootCrumb then 'rootFolder' else 'folder')
-          splat: (folder.urlPath() unless isRootCrumb)
-          # only add title tooltips if there's a chance they could be ellipsized
-          title: (name if @state.maxCrumbWidth < 500)
-        },
-          span {
-            className: 'ellipsis'
-            style:
-              maxWidth: (@state.maxCrumbWidth unless isLastCrumb)
-          },
-            name
-
-    renderDynamicCrumbs: ->
-      if @props.showingSearchResults
-        [
-          @renderSingleCrumb(null, !'isLastCrumb', !!'isRootCrumb'),
-          li {},
-            Link {
-              to: 'search'
-              query: @props.query
-            },
-              span {
-                className: 'ellipsis'
-              },
-                if @props.query.search_term
-                  I18n.t('search_results_for', 'search results for "%{search_term}"', {search_term: @props.query.search_term})
-        ]
-      else
-        return [] unless @props.rootTillCurrentFolder?.length
-        [foldersInMiddle..., lastFolder] = @props.rootTillCurrentFolder
-        if @state.maxCrumbWidth > @state.minCrumbWidth
-          @props.rootTillCurrentFolder.map (folder, i) =>
-            @renderSingleCrumb(folder, folder isnt lastFolder, i is 0)
-        else
-          [
-            BreadcrumbCollapsedContainer({foldersToContain: foldersInMiddle}),
-            @renderSingleCrumb(lastFolder, false)
-          ]
-
-    render: withReactDOM ->
-      nav {
-        'aria-label':'breadcrumbs'
-        role: 'navigation'
-        id: 'breadcrumbs'
-        ref: 'breadcrumbs'
-      },
-        ul {},
-          # The first link (house icon)
-          li className: 'home',
-            a href: '/',
-              i className: 'icon-home standalone-icon', title: @state.homeName,
-                span className: 'screenreader-only',
-                  @state.homeName
-          # Context link
-          li {},
-            a href: @state.contextUrl,
-              span className: 'ellipsible',
-                @state.contextName
-          @renderDynamicCrumbs()...
-
-

@@ -14,38 +14,44 @@
 # You should have received a copy of the GNU Affero General Public License along
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
-
 module Lti
   class ToolProxyController < ApplicationController
-    include Lti::ApiServiceHelper
+    before_filter :require_context
+    before_filter :require_user
 
-    before_filter :require_context, :except => [:show]
-    skip_before_filter :require_user, only: [:create, :show]
-    skip_before_filter :load_user, only: [:create, :show]
-
-    def show
-      tool_proxy = ToolProxy.where(guid: params['tool_proxy_guid']).first
-      if tool_proxy && oauth_authenticated_request?(tool_proxy.shared_secret)
-        render json: tool_proxy.raw_data
-      else
-        render json: {error: 'unauthorized'}, status: :unauthorized
+    def destroy
+      if authorized_action(@context, @current_user, :update)
+        update_workflow_state('deleted')
+        render json: '{"status":"success"}'
       end
     end
 
-    def create
-      secret = RegistrationRequestService.retrieve_registration_password(oauth_consumer_key)
-      if oauth_authenticated_request?(secret)
-        tool_proxy = ToolProxyService.new.process_tool_proxy_json(request.body.read, context, oauth_consumer_key)
-        json = {
-          "@context" => "http://purl.imsglobal.org/ctx/lti/v2/ToolProxyId",
-          "@type" => "ToolProxy",
-          "@id" => nil,
-          "tool_proxy_guid" => tool_proxy.guid
-        }
+    def update
+      if authorized_action(@context, @current_user, :update)
+        update_workflow_state(params['workflow_state'])
+        render json: '{"status":"success"}'
+      end
+    end
 
-        render json: json, status: :created
-      else
-        render json: {error: 'unauthorized'}, status: :unauthorized
+    private
+
+    def update_workflow_state(workflow_state)
+      tool_proxy = Lti::ToolProxy.find(params[:tool_proxy_id])
+      tool_proxy.update_attribute(:workflow_state, workflow_state)
+
+      # this needs to be moved to whatever changes the workflow state to active
+      invalidate_nav_tabs_cache(tool_proxy)
+    end
+
+    def invalidate_nav_tabs_cache(tool_proxy)
+      placements = Set.new
+
+      tool_proxy.resources.each do |resource_handler|
+        placements.merge(resource_handler.placements.map(&:placement))
+      end
+
+      unless (placements & [ResourcePlacement::COURSE_NAVIGATION, ResourcePlacement::ACCOUNT_NAVIGATION]).blank?
+        Lti::NavigationCache.new(@domain_root_account).invalidate_cache_key
       end
     end
 

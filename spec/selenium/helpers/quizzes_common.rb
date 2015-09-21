@@ -1,8 +1,5 @@
 require_relative "../common"
 
-shared_examples_for "quizzes selenium tests" do
-  include_examples "in-process server selenium tests"
-
   def create_quiz_with_default_due_dates
     due_at = Time.zone.now
     unlock_at = Time.zone.now.advance(days:-2)
@@ -24,7 +21,7 @@ shared_examples_for "quizzes selenium tests" do
     type_in_tiny ".question_form:visible textarea.question_content", 'Hi, this is a multiple choice question.'
 
     answers = question.find_elements(:css, ".form_answers > .answer")
-    answers.length.should == 4
+    expect(answers.length).to eq 4
     replace_content(answers[0].find_element(:css, ".select_answer input"), "Correct Answer")
     set_answer_comment(0, "Good job!")
     replace_content(answers[1].find_element(:css, ".select_answer input"), "Wrong Answer #1")
@@ -49,7 +46,7 @@ shared_examples_for "quizzes selenium tests" do
     type_in_tiny '.question:visible textarea.question_content', 'This is not a true/false question.'
 
     answers = question.find_elements(:css, ".form_answers > .answer")
-    answers.length.should == 2
+    expect(answers.length).to eq 2
     answers[1].find_element(:css, ".select_answer_link").click # false - get it?
     set_answer_comment(1, "Good job!")
 
@@ -96,9 +93,35 @@ shared_examples_for "quizzes selenium tests" do
     submit_form(question)
     wait_for_ajaximations
     questions = ffj(".question_holder:visible")
-    questions.length.should == @question_count
+    expect(questions.length).to eq @question_count
     click_settings_tab
-    f(".points_possible").text.should == @points_total.to_s
+    expect(f(".points_possible").text).to eq @points_total.to_s
+  end
+
+  def quiz_with_multiple_type_questions(goto_edit=true)
+    @context = @course
+    bank = @course.assessment_question_banks.create!(:title => 'Test Bank')
+    @q = quiz_model
+    a = bank.assessment_questions.create!
+    b = bank.assessment_questions.create!
+    c = bank.assessment_questions.create!
+    answers = [ {'id' => 1}, {'id' => 2}, {'id' => 3} ]
+
+    @quest1 = @q.quiz_questions.create!(question_data:
+                                            {name: "first question", question_type: 'multiple_choice_question',
+                                             'answers' => answers, points_possible: 1}, assessment_question: a)
+    @quest2 = @q.quiz_questions.create!(question_data:
+                                            {name: "second question", question_text: 'What is 5+5?',
+                                             question_type: 'numerical_question',
+                                             'answers' => [], points_possible: 1}, assessment_question: b)
+    @quest3 = @q.quiz_questions.create!(question_data:
+                                            {name: "third question", question_type: 'essay_question',
+                                             'answers' => [], points_possible: 1}, assessment_question: c)
+    yield bank, @q if block_given?
+    @q.generate_quiz_data
+    @q.save!
+    get "/courses/#{@course.id}/quizzes/#{@q.id}/edit" if goto_edit
+    @q
   end
 
   def quiz_with_new_questions(goto_edit=true)
@@ -198,7 +221,7 @@ shared_examples_for "quizzes selenium tests" do
     yield
   ensure
     #This step is to prevent selenium from freezing when the dialog appears when leaving the page
-    driver.find_element(:link, 'Quizzes').click
+    fln('Quizzes').click
     driver.switch_to.alert.accept
   end
 
@@ -206,9 +229,9 @@ shared_examples_for "quizzes selenium tests" do
   #   You can pass a block to specify which answer to choose, the block will
   #   receive the set of possible answers. If you don't, the first (and correct)
   #   answer will be chosen.
-  def take_and_answer_quiz(submit=true, &answer_chooser)
+  def take_and_answer_quiz(submit=true)
     get "/courses/#{@course.id}/quizzes/#{@quiz.id}/take?user_id=#{@user.id}"
-    expect_new_page_load { driver.find_element(:link_text, 'Take the Quiz').click }
+    expect_new_page_load { fln('Take the Quiz').click }
 
     answer = if block_given?
       yield(@quiz.stored_questions[0][:answers])
@@ -223,9 +246,31 @@ shared_examples_for "quizzes selenium tests" do
 
     if submit
       driver.execute_script("$('#submit_quiz_form .btn-primary').click()")
-
       keep_trying_until do
-        f('.quiz-submission .quiz_score .score_value').should be_displayed
+        expect(f('.quiz-submission .quiz_score .score_value')).to be_displayed
+      end
+    end
+  end
+
+  def answer_questions_and_submit(quiz, num_questions, submit = true)
+    num_questions.times do |o|
+     question = quiz.stored_questions[o][:id]
+     case quiz.stored_questions[o][:question_type]
+     when "multiple_choice_question"
+       fj("input[type=radio][name= 'question_#{question}']").click
+       wait_for_js
+     when "essay_question"
+       type_in_tiny ".question:visible textarea[name = 'question_#{question}']", 'This is an essay question.'
+     when "numerical_question"
+       fj("input[type=text][name= 'question_#{question}']").send_keys('10')
+       wait_for_js
+     end
+    end
+
+    if submit
+      expect_new_page_load { f('#submit_quiz_button').click }
+      keep_trying_until do
+        expect(f('.quiz-submission .quiz_score .score_value')).to be_displayed
       end
     end
   end
@@ -233,13 +278,13 @@ shared_examples_for "quizzes selenium tests" do
   def set_answer_comment(answer_num, text)
     driver.execute_script("$('.question_form:visible .form_answers .answer:eq(#{answer_num}) .comment_focus').click()")
     wait_for_ajaximations
-    driver.execute_script("$('.question_form:visible .form_answers .answer:eq(#{answer_num}) .answer_comment_box').val('#{text}')\;")
+    type_in_tiny(".question_form:visible .form_answers .answer:eq(#{answer_num}) .answer_comments textarea", text)
   end
 
   def set_question_comment(selector, text)
     driver.execute_script("$('.question_form:visible #{selector} .comment_focus').click()")
     wait_for_ajaximations
-    driver.execute_script("$('.question_form:visible #{selector} .comments').val('#{text}')\;")
+    type_in_tiny(".question_form:visible #{selector} textarea", text)
   end
 
   def hover_first_question
@@ -397,11 +442,11 @@ shared_examples_for "quizzes selenium tests" do
   def group_should_contain_question(group, question)
     # check active record
     question.reload
-    question.quiz_group_id.should == group.id
+    expect(question.quiz_group_id).to eq group.id
 
     # check the interface
     questions = get_question_data_for_group group.id
-    questions.detect { |item| item[:id] == question.id }.should_not be_nil
+    expect(questions.detect { |item| item[:id] == question.id }).not_to be_nil
   end
 
   ##
@@ -432,4 +477,77 @@ shared_examples_for "quizzes selenium tests" do
     target = "#group_top_#{group_id} + *"
     js_drag_and_drop source, target
   end
+
+def quiz_create(params={})
+
+  @quiz = @course.quizzes.create
+
+  default_params = {
+      quiz_name: 'bender',
+      question_name: 'shiny',
+  }
+  params = default_params.merge(params)
+
+  answers = [
+      {weight: 100, answer_text: 'A', answer_comments: '', id: 1490},
+      {weight: 0, answer_text: 'B', answer_comments: '', id: 1020},
+      {weight: 0, answer_text: 'C', answer_comments: '', id: 7051}
+  ]
+  data = { question_name:params[:quiz_name], points_possible: 1, question_text: params[:question_name],
+           answers: answers, question_type: 'multiple_choice_question'
+  }
+
+  @quiz.quiz_questions.create!(question_data: data)
+
+  @quiz.workflow_state = "available"
+  @quiz.generate_quiz_data
+  @quiz.published_at = Time.now
+  @quiz.save!
+  @quiz
+end
+
+def seed_quiz_wth_submission(num=1)
+  quiz_data =
+      [
+          {
+              question_name: 'Multiple Choice',
+              points_possible: 10,
+              question_text: 'Pick wisely...',
+              answers: [
+                  {weight: 100, answer_text: 'Correct', id: 1},
+                  {weight: 0, answer_text: 'Wrong', id: 2},
+                  {weight: 0, answer_text: 'Wrong', id: 3}
+              ],
+              question_type: 'multiple_choice_question'
+          },
+          {
+              question_name: 'File Upload',
+              points_possible: 5,
+              question_text: 'Upload a file',
+              question_type: 'file_upload_question'
+          },
+          {
+              question_name: 'Short Essay',
+              points_possible: 20,
+              question_text: 'Write an essay',
+              question_type: 'essay_question'
+          }
+      ]
+
+  quiz = @course.quizzes.create title: 'Quiz Me!'
+
+  num.times do
+    quiz_data.each do |question|
+      quiz.quiz_questions.create! question_data: question
+    end
+  end
+
+  quiz.workflow_state = 'available'
+  quiz.save!
+
+  submission = quiz.generate_submission @students[0]
+  submission.workflow_state = 'complete'
+  submission.save!
+
+  quiz
 end

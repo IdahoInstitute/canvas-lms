@@ -24,6 +24,9 @@ define([
   'underscore',
   'compiled/views/quizzes/LDBLoginPopup',
   'worker!compiled/workers/quizzes/quiz_taking_police',
+  'compiled/quizzes/log_auditing',
+  'compiled/quizzes/dump_events',
+  'compiled/views/editor/KeyboardShortcuts',
   'jquery.ajaxJSON' /* ajaxJSON */,
   'jquery.toJSON',
   'jquery.instructure_date_and_time' /* friendlyDatetime, friendlyDate */,
@@ -35,7 +38,10 @@ define([
   'tinymce.editor_box' /* editorBox */,
   'vendor/jquery.scrollTo' /* /\.scrollTo/ */,
   'compiled/behaviors/quiz_selectmenu'
-], function(FileUploadQuestionView, File, I18n, $, autoBlurActiveInput, _, LDBLoginPopup, QuizTakingPolice) {
+], function(FileUploadQuestionView, File, I18n, $, autoBlurActiveInput, _,
+            LDBLoginPopup, QuizTakingPolice, QuizLogAuditing,
+            QuizLogAuditingEventDumper, KeyboardShortcuts) {
+
   var lastAnswerSelected = null;
   var lastSuccessfulSubmissionData = null;
   var showDeauthorizedDialog;
@@ -161,7 +167,6 @@ define([
               },
               // Error callback
               function(resp, ec) {
-                var current_user_id = $("#identity .user_id").text() || "none";
                 quizSubmission.currentlyBackingUp = false;
 
                 // has the user logged out?
@@ -171,6 +176,7 @@ define([
                 }
                 else {
                   // Connectivity lost?
+                  var current_user_id = window.ENV.current_user_id || "none";
                   $.ajaxJSON(
                       location.protocol + '//' + location.host + "/simple_response.json?user_id=" + current_user_id + "&rnd=" + Math.round(Math.random() * 9999999),
                       'GET', {},
@@ -219,7 +225,7 @@ define([
           }
         }
 
-        if(quizSubmission.isTimeUp(currentTimeLeft)) {
+        if(quizSubmission.isTimeUp(currentTimeLeft) && !ENV.IS_PREVIEW) {
           quizSubmission.showTimeUpDialog(now);
         } else if(currentTimeToDueDate != null && currentTimeLeft > currentTimeToDueDate) {
           quizSubmission.showDueDateWarnings(currentTimeToDueDate);
@@ -292,7 +298,7 @@ define([
       },
 
       getTimeElapsed: function() {
-        $(".time_header").text(I18n.beforeLabel('time_elapsed', "Time Elapsed"));
+        $(".time_header").text(I18n.beforeLabel(I18n.t('labels.time_elapsed', "Time Elapsed")));
         var now = new Date().getTime();
         var startedAt = Date.parse(quizSubmission.startedAt.text()).getTime();
         return now - startedAt;
@@ -511,7 +517,8 @@ define([
           }
         }
       })
-      .delegate(".flag_question", 'click', function() {
+      .delegate(".flag_question", 'click', function(e) {
+        e.preventDefault();
         var $question = $(this).parents(".question");
         $question.toggleClass('marked');
         $(this).attr("aria-checked", $question.hasClass('marked'));
@@ -749,5 +756,11 @@ define([
         $timer.text($timeRunningTimeRemaining.text());
       }
     });
+    if(ENV.QUIZ_SUBMISSION_EVENTS_URL) {
+      QuizLogAuditing.start();
+      QuizLogAuditingEventDumper(false);
+    }
   });
+
+  $('.essay_question .answers').before((new KeyboardShortcuts()).render().el);
 });

@@ -16,6 +16,8 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
+require 'atom'
+
 class DiscussionEntry < ActiveRecord::Base
   include Workflow
   include SendToInbox
@@ -50,6 +52,7 @@ class DiscussionEntry < ActiveRecord::Base
   validates_presence_of :discussion_topic_id
   before_validation :set_depth, :on => :create
   validate :validate_depth, on: :create
+  validate :discussion_not_deleted, on: :create
 
   sanitize_field :message, CanvasSanitize::SANITIZE
 
@@ -101,7 +104,7 @@ class DiscussionEntry < ActiveRecord::Base
       if self.created_at > self.discussion_topic.created_at + 2.weeks
         DiscussionEntry.active.
             where('discussion_topic_id=? AND created_at > ?', self.discussion_topic_id, 2.weeks.ago).
-            select(:user_id).uniq.map(&:user_id)
+            uniq.pluck(:user_id)
       else
         self.discussion_topic.active_participants
       end
@@ -115,6 +118,11 @@ class DiscussionEntry < ActiveRecord::Base
     Setting.get('discussion_entry_max_depth', '50').to_i
   end
 
+  def self.rating_sums(entry_ids)
+    sums = self.where(:id => entry_ids).where('COALESCE(rating_sum, 0) != 0')
+    Hash[sums.map{|x| [x.id, x.rating_sum]}]
+  end
+
   def set_depth
     self.depth ||= (self.parent_entry.try(:depth) || 0) + 1
   end
@@ -125,8 +133,13 @@ class DiscussionEntry < ActiveRecord::Base
     end
   end
 
+  def discussion_not_deleted
+    errors.add(:base, "Requires non-deleted discussion topic") if self.discussion_topic.deleted?
+  end
+
   def reply_from(opts)
     raise IncomingMail::Errors::UnknownAddress if self.context.root_account.deleted?
+    raise IncomingMail::Errors::ReplyToDeletedDiscussion if self.discussion_topic.deleted?
     user = opts[:user]
     if opts[:html]
       message = opts[:html].strip
@@ -260,7 +273,7 @@ class DiscussionEntry < ActiveRecord::Base
 
   def update_topic
     if self.discussion_topic
-      last_reply_at = [self.discussion_topic.last_reply_at, self.created_at].max
+      last_reply_at = [self.discussion_topic.last_reply_at, self.created_at].compact.max
       DiscussionTopic.where(:id => self.discussion_topic_id).update_all(:last_reply_at => last_reply_at, :updated_at => Time.now.utc)
     end
   end
@@ -275,35 +288,32 @@ class DiscussionEntry < ActiveRecord::Base
     given { |user| self.user && self.user == user && self.discussion_topic.available_for?(user) && context.user_can_manage_own_discussion_posts?(user) }
     can :update and can :delete
 
-    given { |user, session| self.context.grants_right?(user, session, :read_forum) }
+    given { |user, session| self.context.grants_right?(user, session, :read_forum) && self.discussion_topic.visible_for?(user) }
     can :read
 
-    given { |user, session| self.context.grants_right?(user, session, :post_to_forum) && self.discussion_topic.available_for?(user) }
+    given { |user, session| self.context.grants_right?(user, session, :post_to_forum) && !self.discussion_topic.locked_for?(user) && self.discussion_topic.visible_for?(user) }
     can :reply and can :create and can :read
 
-    given { |user, session| self.context.grants_right?(user, session, :post_to_forum) }
+    given { |user, session| self.context.grants_right?(user, session, :post_to_forum) && self.discussion_topic.visible_for?(user)}
     can :read
 
     given { |user, session| context.respond_to?(:allow_student_forum_attachments) && context.allow_student_forum_attachments && context.grants_right?(user, session, :post_to_forum) && discussion_topic.available_for?(user) }
     can :attach
 
-    given { |user, session| !self.discussion_topic.root_topic_id && self.context.grants_right?(user, session, :moderate_forum) && self.discussion_topic.available_for?(user) }
+    given { |user, session| !self.discussion_topic.root_topic_id && self.context.grants_right?(user, session, :moderate_forum) && !self.discussion_topic.locked_for?(user, :check_policies => true) }
     can :update and can :delete and can :reply and can :create and can :read and can :attach
 
     given { |user, session| !self.discussion_topic.root_topic_id && self.context.grants_right?(user, session, :moderate_forum) }
     can :update and can :delete and can :read
 
-    given { |user, session| self.discussion_topic.root_topic && self.discussion_topic.root_topic.context.grants_right?(user, session, :moderate_forum) && self.discussion_topic.available_for?(user) }
+    given { |user, session| self.discussion_topic.root_topic && self.discussion_topic.root_topic.context.grants_right?(user, session, :moderate_forum) && !self.discussion_topic.locked_for?(user, :check_policies => true) }
     can :update and can :delete and can :reply and can :create and can :read and can :attach
 
     given { |user, session| self.discussion_topic.root_topic && self.discussion_topic.root_topic.context.grants_right?(user, session, :moderate_forum) }
     can :update and can :delete and can :read
 
-    given { |user, session| self.discussion_topic.context.respond_to?(:collection) && self.discussion_topic.context.collection.grants_right?(user, session, :read) }
-    can :read
-
-    given { |user, session| self.discussion_topic.context.respond_to?(:collection) && self.discussion_topic.context.collection.grants_right?(user, session, :comment) }
-    can :create
+    given { |user, session| self.discussion_topic.grants_right?(user, session, :rate) }
+    can :rate
   end
 
   scope :for_user, lambda { |user| where(:user_id => user).order("discussion_entries.created_at") }
@@ -390,6 +400,12 @@ class DiscussionEntry < ActiveRecord::Base
     find_existing_participant(current_user).workflow_state
   end
 
+  def rating(current_user = nil)
+    current_user ||= self.current_user
+    return nil unless current_user # default for logged out users
+    find_existing_participant(current_user).rating
+  end
+
   def read?(current_user = nil)
     read_state(current_user) == "read"
   end
@@ -424,6 +440,50 @@ class DiscussionEntry < ActiveRecord::Base
     end
   end
 
+  # Public: Change the rating of the entry for the specified user.
+  #
+  # new_rating    - The new rating.
+  # current_user - The User to to change state for. This function does nothing
+  #                if nil is passed. (default: self.current_user)
+  #
+  # Returns nil if current_user is nil, the DiscussionEntryParticipent if the
+  # rating was changed, or true if the rating was not changed. If the
+  # rating is not changed, a participant record will not be created.
+  def change_rating(new_rating, current_user = nil)
+    current_user ||= self.current_user
+    return nil unless current_user
+
+    entry_participant = nil
+    transaction do
+      lock!
+      old_rating = self.rating(current_user)
+      if new_rating == old_rating
+        return true
+      end
+
+      entry_participant = self.update_or_create_participant(current_user: current_user, rating: new_rating)
+
+      update_aggregate_rating(old_rating, new_rating)
+    end
+
+    entry_participant
+  end
+
+  def update_aggregate_rating(old_rating, new_rating)
+    count_delta = (new_rating.nil? ? 0 : 1) - (old_rating.nil? ? 0 : 1)
+    sum_delta = new_rating.to_i - old_rating.to_i
+
+    DiscussionEntry.where(id: id). update_all([
+      'rating_count = COALESCE(rating_count, 0) + ?,
+        rating_sum = COALESCE(rating_sum, 0) + ?,
+        updated_at = ?',
+      count_delta,
+      sum_delta,
+      Time.current
+    ])
+    self.discussion_topic.update_materialized_view
+  end
+
   # Public: Update and save the DiscussionEntryParticipant for a specified user,
   # creating it if necessary. This function properly handles race conditions of
   # calling this function simultaneously in two separate processes.
@@ -446,7 +506,8 @@ class DiscussionEntry < ActiveRecord::Base
         entry_participant = self.discussion_entry_participants.where(:user_id => current_user).first
         entry_participant ||= self.discussion_entry_participants.build(:user => current_user, :workflow_state => "unread")
         entry_participant.workflow_state = opts[:new_state] if opts[:new_state]
-        entry_participant.forced_read_state = opts[:forced] if opts.has_key?(:forced)
+        entry_participant.forced_read_state = opts[:forced] if opts.key?(:forced)
+        entry_participant.rating = opts[:rating] if opts.key?(:rating)
         entry_participant.save
       end
     end

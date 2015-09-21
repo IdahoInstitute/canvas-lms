@@ -91,7 +91,7 @@ class AssignmentGroupsController < ApplicationController
   # Returns the list of assignment groups for the current context. The returned
   # groups are sorted by their position field.
   #
-  # @argument include[] [String, "assignments"|"discussion_topic"|"all_dates"|"assignment_visibility"]
+  # @argument include[] [String, "assignments"|"discussion_topic"|"all_dates"|"assignment_visibility"|"overrides"]
   #  Associations to include with the group. "discussion_topic", "all_dates"
   #  "assignment_visibility" are only valid are only valid if "assignments" is also included.
   #  The "assignment_visibility" option additionally requires that the Differentiated Assignments course feature be turned on.
@@ -99,59 +99,19 @@ class AssignmentGroupsController < ApplicationController
   # @argument override_assignment_dates [Boolean]
   #   Apply assignment overrides for each assignment, defaults to true.
   #
+  # @argument grading_period_id [Integer]
+  #   The id of the grading period in which assignment groups are being requested
+  #   (Requires the Multiple Grading Periods account feature turned on)
+  #
   # @returns [AssignmentGroup]
   def index
     if authorized_action(@context.assignment_groups.scoped.new, @current_user, :read)
-      @groups = @context.assignment_groups.active
-
-      params[:include] = Array(params[:include])
-      assignments_by_group = {}
-      if params[:include].include? 'assignments'
-        assignment_includes = [:rubric, :quiz, :external_tool_tag]
-        assignment_includes.concat(params[:include] & [:discussion_topic])
-        assignment_includes.concat(params[:include] & [:all_dates])
-
-        all_visible_assignments = AssignmentGroup.visible_assignments(@current_user, @context, @groups, assignment_includes)
-
-        # because of a bug with including content_tags, we are preloading here rather than in
-        # visible_assignments with multiple associations referencing content_tags table and therefore
-        # aliased table names the conditons on has_many :context_module_tags will break
-        if params[:include].include? "module_ids"
-          module_includes = [:context_module_tags,{:discussion_topic => :context_module_tags},{:quiz => :context_module_tags}]
-          Assignment.send(:preload_associations, all_visible_assignments, module_includes)
-        end
-
-        assignment_descriptions = all_visible_assignments.map(&:description)
-        assignments_by_group = all_visible_assignments.group_by(&:assignment_group_id)
-        user_content_attachments = api_bulk_load_user_content_attachments(
-          assignment_descriptions, @context, @current_user
-        )
-
-        override_param = params[:override_assignment_dates] || true
-        override_dates = value_to_boolean(override_param)
-        if override_dates
-          assignments_with_overrides = @context.assignments.active.except(:order)
-                                       .joins(:assignment_overrides)
-                                       .select("assignments.id")
-                                       .uniq
-          assignments_without_overrides = all_visible_assignments - assignments_with_overrides
-          assignments_without_overrides.each { |a| a.has_no_overrides = true }
-        end
-      end
+      assignments = visible_assignments(@context, @current_user)
 
       respond_to do |format|
-        format.json {
-          json = @groups.map { |g|
-            g.context = @context
-            assignment_group_json(g, @current_user, session, params[:include],
-                                  stringify_json_ids: stringify_json_ids?,
-                                  override_assignment_dates: override_dates,
-                                  preloaded_user_content_attachments: user_content_attachments,
-                                  assignments: assignments_by_group[g.id]
-                                  )
-          }
-          render :json => json
-        }
+        format.json do
+          render json: index_groups_json(@context, @current_user, assignments)
+        end
       end
     end
   end
@@ -169,10 +129,12 @@ class AssignmentGroupsController < ApplicationController
     @group = @context.assignment_groups.find(params[:assignment_group_id])
     if authorized_action(@group, @current_user, :update)
       order = params[:order].split(',').map{|id| id.to_i }
-      group_ids = ([@group.id] + (order.empty? ? [] : @context.assignments.find_all_by_id(order).map(&:assignment_group_id))).uniq.compact
+      group_ids = ([@group.id] + (order.empty? ? [] : @context.assignments.where(id: order).uniq.except(:order).pluck(:assignment_group_id)))
       Assignment.where(:id => order, :context_id => @context, :context_type => @context.class.to_s).update_all(:assignment_group_id => @group)
       @group.assignments.first.update_order(order) unless @group.assignments.empty?
-      AssignmentGroup.where(:id => group_ids).update_all(:updated_at => Time.now.utc)
+      groups = AssignmentGroup.where(:id => group_ids)
+      groups.update_all(:updated_at => Time.now.utc)
+      groups.each{|assignment_group| AssignmentGroup.notify_observers(:assignments_changed, assignment_group)}
       ids = @group.active_assignments.map(&:id)
       @context.recompute_student_scores rescue nil
       respond_to do |format|
@@ -253,6 +215,152 @@ class AssignmentGroupsController < ApplicationController
           new_assignment_group: @new_group.as_json(include_root: false, include: :active_assignments)
         }}
       end
+    end
+  end
+
+  private
+
+  def assignments_by_group(visible_assignments)
+    visible_assignments.group_by(&:assignment_group_id)
+  end
+
+  def assignment_includes
+    includes = [:rubric, :quiz, :external_tool_tag, :rubric_association]
+    includes << "discussion_topic" if params[:include].include?("discussion_topic")
+    includes << :assignment_overrides if params[:include].include?('all_dates')
+    includes
+  end
+
+  def assignment_visibilities(course)
+    if include_visibility? && differentiated_assignments?
+      AssignmentStudentVisibility.users_with_visibility_by_assignment(
+        course_id: course.id,
+        assignment_id: visible_assignment_ids
+      )
+    else
+      params.fetch(:include, []).delete('assignment_visibility')
+      AssignmentStudentVisibility.none
+    end
+  end
+
+  def differentiated_assignments?
+    @context.feature_enabled?(:differentiated_assignments)
+  end
+
+  def index_groups_json(context, current_user, visible_assignments)
+    include_overrides = params.fetch(:include, []).include? 'overrides'
+
+    context.assignment_groups.active.map do |group|
+      group.context = context
+      assignments = assignments_by_group(visible_assignments)[group.id] || []
+      overrides = []
+      if include_overrides
+        # TODO: use above?
+        ActiveRecord::Associations::Preloader.new(assignments, :assignment_overrides).run
+
+        assignments.select{ |a| a.assignment_overrides.size == 0 }.
+            each { |a| a.has_no_overrides = true }
+        overrides = assignments.map{|assignment| assignment.assignment_overrides.active}
+      end
+
+      assignment_group_json(
+        group,
+        current_user,
+        session,
+        params[:include],
+        {
+          stringify_json_ids: stringify_json_ids?,
+          override_assignment_dates: override_dates?,
+          preloaded_user_content_attachments: user_content_attachments(context, current_user),
+          assignments: assignments,
+          assignment_visibilities: assignment_visibilities(context),
+          differentiated_assignments_enabled: differentiated_assignments?,
+          exclude_descriptions: !!params[:exclude_descriptions],
+          overrides: overrides.flatten
+        }
+      )
+    end
+  end
+
+  def include_visibility?
+    if Array(params[:include]).include?('assignment_visibility')
+      @context.grants_any_right?(@current_user, :read_as_admin, :manage_grades, :manage_assignments)
+    end
+  end
+
+  def override_dates?
+    value_to_boolean(params.fetch(:override_assignment_dates, true))
+  end
+
+  def user_content_attachments(context, current_user)
+    unless params[:exclude_descriptions]
+      api_bulk_load_user_content_attachments(
+        visible_assignment_descriptions, context, current_user
+      )
+    end
+  end
+
+  def visible_assignment_descriptions
+    visible_assignments(@context, @current_user).map(&:description)
+  end
+
+  def visible_assignment_ids
+    visible_assignments(@context, @current_user).map(&:id)
+  end
+
+  def visible_assignments(context, current_user)
+    if params[:include] && params[:include].include?('assignments')
+      # TODO: possible keyword arguments refactor
+      assignments = AssignmentGroup.visible_assignments(
+        current_user,
+        context,
+        context.assignment_groups.active,
+        assignment_includes
+      ).with_student_submission_count
+
+      if params[:grading_period_id].present? && multiple_grading_periods?
+        grading_period = GradingPeriod.context_find(
+          context,
+          params.fetch(:grading_period_id)
+        )
+
+        assignments = Assignment::FilterWithOverridesByDueAt.new(
+          assignments: assignments,
+          grading_period: grading_period,
+          differentiated_assignments: differentiated_assignments?
+        ).filter_assignments
+      end
+
+      # because of a bug with including content_tags, we are preloading
+      # here rather than in assignments with multiple associations
+      # referencing content_tags table and therefore aliased table names
+      # the conditions on has_many :context_module_tags will break
+      if params[:include].include? "module_ids"
+        module_includes = [
+          :context_module_tags,
+          { :discussion_topic => :context_module_tags },
+          { :quiz => :context_module_tags }
+        ]
+        ActiveRecord::Associations::Preloader.new(assignments, module_includes).run
+      end
+
+      # FIXME: determine if this code is necessary as it is potentially
+      # dead code
+      if override_dates?
+        assignments_with_overrides = context
+          .assignments
+          .active
+          .except(:order)
+          .joins(:assignment_overrides)
+          .select("assignments.id")
+          .uniq
+        assignments_without_overrides = assignments - assignments_with_overrides
+        assignments_without_overrides.each { |a| a.has_no_overrides = true }
+      end
+
+      assignments
+    else
+      Assignment.none
     end
   end
 end

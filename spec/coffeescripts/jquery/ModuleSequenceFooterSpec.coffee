@@ -6,11 +6,10 @@ define [
     setup: ->
       @$testEl = $('<div>')
       $('#fixtures').append @$testEl
-      sinon.stub $.fn.moduleSequenceFooter.MSFClass.prototype, 'fetch', -> {done: ->}
+      @stub $.fn.moduleSequenceFooter.MSFClass.prototype, 'fetch', -> {done: ->}
 
-    teardown: -> 
+    teardown: ->
       @$testEl.remove()
-      $.fn.moduleSequenceFooter.MSFClass.prototype.fetch.restore()
 
   test 'returns jquery object of itself', ->
     jobj = @$testEl.moduleSequenceFooter({assetType: 'Assignment', assetID: 42})
@@ -29,7 +28,7 @@ define [
 
   test 'accepts animation option', ->
     $.fn.moduleSequenceFooter.MSFClass.prototype.fetch.restore()
-    sinon.stub $.fn.moduleSequenceFooter.MSFClass.prototype, 'fetch', ->
+    @stub $.fn.moduleSequenceFooter.MSFClass.prototype, 'fetch', ->
       this.success
         items: [
           prev: null
@@ -60,15 +59,15 @@ define [
     equal @$testEl.find('.module-sequence-padding:not(.no-animation)').length, 1, 'no-animation removed from module-sequence-padding'
 
   module 'ModuleSequenceFooter: rendering',
-    setup: -> 
+    setup: ->
       @server = sinon.fakeServer.create()
       @$testEl = $('<div>')
       $('#fixtures').append @$testEl
-    teardown: -> 
+    teardown: ->
       @server.restore()
       @$testEl.remove()
 
-  nullButtonData = 
+  nullButtonData =
      {
        items:
          [
@@ -159,8 +158,8 @@ define [
     @$testEl.moduleSequenceFooter({courseID: 42, assetType: 'Assignment', assetID: 123})
     @server.respond()
 
-    ok this.$testEl.find('a').first().data('tooltip-title').match('Module C'), "displays previous module tooltip"
-    ok this.$testEl.find('a').last().data('tooltip-title').match('Module B'), "displays next module tooltip"
+    ok this.$testEl.find('a').first().data('html-tooltip-title').match('Module C'), "displays previous module tooltip"
+    ok this.$testEl.find('a').last().data('html-tooltip-title').match('Module B'), "displays next module tooltip"
 
   itemTooltipData =
      {
@@ -209,8 +208,8 @@ define [
     @$testEl.moduleSequenceFooter({courseID: 42, assetType: 'Assignment', assetID: 123})
     @server.respond()
 
-    ok this.$testEl.find('a').first().data('tooltip-title').match('Project 1'), "displays previous item tooltip"
-    ok this.$testEl.find('a').last().data('tooltip-title').match('Project 33'), "displays next item tooltip"
+    ok this.$testEl.find('a').first().data('html-tooltip-title').match('Project 1'), "displays previous item tooltip"
+    ok this.$testEl.find('a').last().data('html-tooltip-title').match('Project 33'), "displays next item tooltip"
 
   test 'if url has a module_item_id use that as the assetID and ModuleItem as the type instead', ->
     @server.respondWith "GET",
@@ -223,7 +222,7 @@ define [
     equal @server.requests[0].status, '200', 'Request was successful'
 
   test 'show gets called when rendering', ->
-    @sandbox.stub(@$testEl, 'show')
+    @stub(@$testEl, 'show')
     @server.respondWith "GET",
                         "/api/v1/courses/42/module_item_sequence?asset_type=Assignment&asset_id=123&frame_external_urls=true",
                         [

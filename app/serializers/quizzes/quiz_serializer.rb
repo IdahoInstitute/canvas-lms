@@ -21,7 +21,8 @@ module Quizzes
                 # :takeable,
                 :quiz_submissions_zip_url, :preview_url, :quiz_submission_versions_html_url,
                 :assignment_id, :one_time_results, :only_visible_to_overrides,
-                :assignment_group_id
+                :assignment_group_id, :show_correct_answers_last_attempt, :version_number,
+                :question_types, :has_access_code
 
     def_delegators :@controller,
       # :api_v1_course_assignment_group_url,
@@ -43,6 +44,8 @@ module Quizzes
       :context,
       :submitted_students_visible_to,
       :unsubmitted_students_visible_to
+
+    def_delegators :@quiz, :quiz_questions
 
     # has_one :assignment_group, embed: :ids, root: :assignment_group
     # has_one :quiz_submission, embed: :ids, root: :quiz_submissions, embed_in_root: true, serializer: Quizzes::QuizSubmissionSerializer
@@ -123,6 +126,14 @@ module Quizzes
       end
     end
 
+    def description
+      if @serializer_options[:description_formatter]
+        @serializer_options[:description_formatter].call(quiz.description)
+      else
+        quiz.description
+      end
+    end
+
     def unsubmitted_students_url
       api_v1_course_quiz_submission_users_url(context, quiz, submitted: 'false')
     end
@@ -152,7 +163,7 @@ module Quizzes
     end
 
     def section_count
-      context.active_course_sections.count
+      context.active_section_count
     end
 
     def locked_for_json_type
@@ -298,7 +309,7 @@ module Quizzes
     # @param [:due_at|:lock_at|:unlock_at] domain
     def overridden_date(domain)
       !serializer_option(:skip_date_overrides) &&
-      context.user_has_been_student?(current_user) ?
+      context.user_has_been_student?(current_user) && due_dates.any? ?
         due_dates[0][domain] :
         quiz.send(domain)
     end

@@ -19,7 +19,7 @@ def check_syntax(files)
   Array(files).each do |js_file|
     js_file.strip!
     # only lint things in public/javascripts that are not in /vendor, /compiled, etc.
-    if js_file.match /public\/javascripts\/(?!vendor|compiled|i18n.js|translations)/
+    if js_file.match /public\/javascripts\/(?!vendor|compiled|i18n.js|translations|old_unsupported_dont_use_react)/
       file_path = File.join(Rails.root, js_file)
 
       unless quick
@@ -105,37 +105,46 @@ namespace :canvas do
   end
 
   desc "Compile javascript and css assets."
-  task :compile_assets, :generate_documentation, :check_syntax do |t, args|
-    args.with_defaults(:generate_documentation => true, :check_syntax => false)
+  task :compile_assets, :generate_documentation, :check_syntax, :compile_css, :build_js do |t, args|
+    args.with_defaults(:generate_documentation => true, :check_syntax => false, :compile_css => true, :build_js => true)
     truthy_values = [true, 'true', '1']
     generate_documentation = truthy_values.include?(args[:generate_documentation])
     check_syntax = truthy_values.include?(args[:check_syntax])
+    compile_css = truthy_values.include?(args[:compile_css])
+    build_js = truthy_values.include?(args[:build_js])
+
+    log_time('Making sure node_modules are up to date') { `npm install` }
+
+    # public/dist/brandable_css/brandable_css_bundles_with_deps.json needs
+    # to exist before we run handlebars stuff, so we have to do this first
+    require 'lib/brandable_css'
+    log_time('compile css (including custom brands)') { BrandableCSS.compile_all! }
 
     require 'parallel'
     processes = (ENV['CANVAS_BUILD_CONCURRENCY'] || Parallel.processor_count).to_i
     puts "working in #{processes} processes"
 
-    tasks = {
-      "Compile sass and make jammit css bundles" => -> {
-        log_time('npm run compile-sass') do
-          half_of_avilable_cores = (processes / 2).ceil.to_s
-          raise unless system({"CANVAS_SASS_STYLE" => "compressed", "CANVAS_BUILD_CONCURRENCY" => half_of_avilable_cores}, "npm run compile-sass")
-        end
+    tasks = Hash.new
 
-        log_time("Jammit") do
-          require 'jammit'
-          Jammit.package!
-        end
-      },
-      "css:styleguide" => -> {
+    if compile_css
+      tasks["css:styleguide"] = -> {
         Rake::Task['css:styleguide'].invoke
-      },
-      "compile coffee, js 18n, and run r.js optimizer" => -> {
+      }
+    end
+
+    if build_js
+      tasks["compile coffee, js 18n, and run r.js optimizer"] = -> {
         ['js:generate', 'i18n:generate_js', 'js:build'].each do |name|
           log_time(name) { Rake::Task[name].invoke }
         end
       }
-    }
+    else
+      tasks["compile coffee"] = -> {
+        ['js:generate'].each do |name|
+          log_time(name) { Rake::Task[name].invoke }
+        end
+      }
+    end
 
     if check_syntax
       tasks["check JavaScript syntax"] = -> {
@@ -157,6 +166,7 @@ namespace :canvas do
     end
     combined_time = times.reduce(:+)
     puts "Finished compiling assets in #{real_time}. parallelism saved #{combined_time - real_time} (#{real_time.to_f / combined_time.to_f * 100.0}%)"
+    raise "Error reving files" unless system('node_modules/.bin/gulp rev')
   end
 
   desc "Check static assets and generate api documentation."
@@ -224,27 +234,10 @@ namespace :db do
     end
   end
 
-   desc "execute migration_lint script."
-   task :migration_lint do
-     output = `script/migration_lint`
-     exit_status = $?.exitstatus
-     puts output
-     if exit_status != 0
-       raise "migration_lint test failed"
-     else
-       puts "migration_lint test succeeded"
-     end
-   end
-
   namespace :migrate do
     desc "Run all pending predeploy migrations"
     task :predeploy => [:environment, :load_config] do
       ActiveRecord::Migrator.new(:up, "db/migrate/", nil).migrate(:predeploy)
-    end
-
-    desc "Run all pending postdeploy migrations"
-    task :postdeploy => [:environment, :load_config] do
-      ActiveRecord::Migrator.new(:up, "db/migrate/", nil).migrate(:postdeploy)
     end
   end
 
@@ -271,6 +264,17 @@ namespace :db do
   end
 end
 
-%w{db:pending_migrations db:migrate:predeploy db:migrate:postdeploy}.each { |task_name| Switchman.shardify_task(task_name) }
+Switchman::Rake.filter_database_servers do |servers, block|
+  if ENV['REGION']
+    if ENV['REGION'] == 'self'
+      servers.select!(&:in_current_region?)
+    else
+      servers.select! { |server| server.in_region?(ENV['REGION']) }
+    end
+  end
+  block.call(servers)
+end
+
+%w{db:pending_migrations db:migrate:predeploy}.each { |task_name| Switchman::Rake.shardify_task(task_name) }
 
 end

@@ -19,7 +19,7 @@
 class LearningOutcome < ActiveRecord::Base
   include Workflow
   attr_accessible :context, :description, :short_description, :title, :display_name
-  attr_accessible :rubric_criterion, :vendor_guid
+  attr_accessible :rubric_criterion, :vendor_guid, :calculation_method, :calculation_int
 
   belongs_to :context, :polymorphic => true
   validates_inclusion_of :context_type, :allow_nil => true, :in => ['Account', 'Course']
@@ -28,12 +28,36 @@ class LearningOutcome < ActiveRecord::Base
 
   EXPORTABLE_ATTRIBUTES = [:id, :context_id, :context_type, :short_description, :context_code, :description, :data, :workflow_state, :created_at, :updated_at, :vendor_guid, :low_grade, :high_grade]
   EXPORTABLE_ASSOCIATIONS = [:context, :learning_outcome_results, :alignments]
-  serialize :data
+  serialize_utf8_safe :data
+
+  before_validation :infer_default_calculation_method, :adjust_calculation_int
   before_save :infer_defaults
-  validates_length_of :description, :maximum => maximum_text_length, :allow_nil => true, :allow_blank => true
-  validates_length_of :short_description, :maximum => maximum_string_length
-  validates_presence_of :short_description, :workflow_state
+
+  CALCULATION_METHODS = {
+    'decaying_average' => "Decaying Average",
+    'n_mastery'        => "n Number of Times",
+    'highest'          => "Highest Score",
+    'latest'           => "Most Recent Score",
+  }.freeze
+  VALID_CALCULATION_INTS = {
+    "decaying_average" => (1..99),
+    "n_mastery" => (2..5),
+    "highest" => [].freeze,
+    "latest" => [].freeze,
+  }.freeze
+
+  validates :description, length: { maximum: maximum_text_length, allow_nil: true, allow_blank: true }
+  validates :short_description, length: { maximum: maximum_string_length }
+  validates :display_name, length: { maximum: maximum_string_length, allow_nil: true, allow_blank: true }
+  validates :calculation_method, inclusion: { in: CALCULATION_METHODS.keys,
+    message: t(
+      "calculation_method must be one of the following: %{calc_methods}",
+      :calc_methods => CALCULATION_METHODS.keys.to_s
+    )
+  }
+  validates :short_description, :workflow_state, presence: true
   sanitize_field :description, CanvasSanitize::SANITIZE
+  validate :validate_calculation_int
 
   set_policy do
     # managing a contextual outcome requires manage_outcomes on the outcome's context
@@ -58,6 +82,73 @@ class LearningOutcome < ActiveRecord::Base
       self.data[:rubric_criterion][:description] = self.short_description
     end
     self.context_code = "#{self.context_type.underscore}_#{self.context_id}" rescue nil
+
+    # if we are changing the calculation_method but not the calculation_int, set the int to the default value
+    if calculation_method_changed? && !calculation_int_changed?
+      self.calculation_int = default_calculation_int
+    end
+  end
+
+  def validate_calculation_int
+    unless valid_calculation_int?(calculation_int, calculation_method)
+      if valid_calculation_ints.to_a.empty?
+        errors.add(:calculation_int, t(
+          "A calculation value is not used with this calculation method"
+        ))
+      else
+        errors.add(:calculation_int, t(
+          "'%{calculation_int}' is not a valid value for this calculation method. The value must be between '%{valid_calculation_ints_min}' and '%{valid_calculation_ints_max}'",
+          :calculation_int => calculation_int,
+          :valid_calculation_ints_min => valid_calculation_ints.min,
+          :valid_calculation_ints_max => valid_calculation_ints.max
+        ))
+      end
+    end
+  end
+
+  def valid_calculation_method?(method=self.calculation_method)
+    CALCULATION_METHODS.keys.include?(method)
+  end
+
+  def valid_calculation_ints(method=self.calculation_method)
+    VALID_CALCULATION_INTS[method]
+  end
+
+  def valid_calculation_int?(int, method=self.calculation_method)
+    if valid_calculation_method?(method)
+      valid_ints = valid_calculation_ints(method)
+      (int.nil? && valid_ints.to_a.empty?) || valid_ints.include?(int)
+    else
+      true
+    end
+  end
+
+  def infer_default_calculation_method
+    # If we are a new record, or are not changing our calculation_method (such as on a pre-existing
+    # record or an import), then assume the default of highest
+    if new_record? || !calculation_method_changed?
+      self.calculation_method ||= default_calculation_method
+    end
+  end
+
+  def adjust_calculation_int
+    # If we are setting calculation_method to latest or highest,
+    # set calculation_int nil unless it is a new record (meaning it was set explicitly)
+    if %w[highest latest].include?(calculation_method) && calculation_method_changed?
+      self.calculation_int = nil unless new_record?
+    end
+  end
+
+  def default_calculation_method
+    "highest"
+  end
+
+  def default_calculation_int(method=self.calculation_method)
+    case method
+    when 'decaying_average' then 75
+    when 'n_mastery' then 5
+    else nil
+    end
   end
 
   def align(asset, context, opts={})
@@ -91,8 +182,12 @@ class LearningOutcome < ActiveRecord::Base
     tags
   end
 
-  def remove_alignment(asset, context, opts={})
-    tag = self.alignments.where(content_id: asset, content_type: asset.class.to_s, tag_type: 'learning_outcome', context_id: context, context_type: context.class.to_s).first
+  def remove_alignment(alignment_id, context)
+    tag = self.alignments.where({
+      context_id: context,
+      context_type: context.class_name,
+      id: alignment_id
+    }).first
     tag.destroy if tag
     tag
   end
@@ -138,6 +233,10 @@ class LearningOutcome < ActiveRecord::Base
     end
   end
 
+  def rubric_criterion
+    data && data[:rubric_criterion]
+  end
+
   def rubric_criterion=(hash)
     self.data ||= {}
 
@@ -181,6 +280,18 @@ class LearningOutcome < ActiveRecord::Base
     save!
   end
 
+  def assessed?(course = nil)
+    if course
+      self.learning_outcome_results.where(context_id: course, context_type: "Course").exists?
+    else
+      if learning_outcome_results.loaded?
+        learning_outcome_results.any?
+      else
+        learning_outcome_results.exists?
+      end
+    end
+  end
+
   def tie_to(context)
     @tied_context = context
   end
@@ -206,14 +317,16 @@ class LearningOutcome < ActiveRecord::Base
     LearningOutcome.where(:id => to_delete).update_all(:workflow_state => 'deleted', :updated_at => Time.now.utc)
   end
 
-  scope :for_context_codes, lambda { |codes| where(:context_code => codes) }
-  scope :active, -> { where("learning_outcomes.workflow_state<>'deleted'") }
-  scope :has_result_for, lambda { |user|
-    joins(:learning_outcome_results).
-        where("learning_outcomes.id=learning_outcome_results.learning_outcome_id AND learning_outcome_results.user_id=?", user).
-        order(best_unicode_collation_key('short_description'))
-  }
+  scope(:for_context_codes, ->(codes) { where(:context_code => codes) })
+  scope(:active, -> { where("learning_outcomes.workflow_state<>'deleted'") })
+  scope(:has_result_for_user,
+    lambda do |user|
+      joins(:learning_outcome_results)
+        .where("learning_outcomes.id=learning_outcome_results.learning_outcome_id " \
+               "AND learning_outcome_results.user_id=?", user)
+        .order(best_unicode_collation_key('short_description'))
+    end
+  )
 
   scope :global, -> { where(:context_id => nil) }
-
 end

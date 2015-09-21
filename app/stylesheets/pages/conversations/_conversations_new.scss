@@ -10,39 +10,85 @@
   bottom: 0;
   margin-bottom: 0;
   display: none;
-  width: 100%;
   box-sizing: border-box;
+  @if $use_new_styles {
+    top: 0 !important; // need a more elegant way of doing this
+    left: $ic-header-primary-width - $ic-sp;
+    width: calc(100% - (#{$ic-header-primary-width} - #{$ic-sp}) );
+    @include breakpoint(wide) { 
+      left: $ic-header-primary-width;
+      width: calc(100% - #{$ic-header-primary-width});
+    }
+  }
+  @else {
+    width: 100%;
+  }
 }
+
+// Get rid of all the new-style flexbox layout for Conversations
+@include remove-nui-flex-layout;
 
 #footer {
   display: none;
 }
 
 #content {
-  overflow:visible;
-}
-
-#content.container-fluid {
-  padding: 0;
+  overflow: visible;
+  @if $use_new_styles { padding: 0; }
+  @else {
+    &.container-fluid { padding: 0; }
+  }
 }
 
 .conversations {
-  min-width: 1160px;
   position: relative;
+  @if $use_new_styles == false { min-width: 1160px; }
 }
 
 .conversations .panel {
-  background: #f1f1f1;
-  background: linear-gradient(to bottom, #fff, #e6e6e6);
-  border-bottom: 1px solid #acacac;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, .2);
   box-sizing: border-box;
-  color: #555;
-  height: 50px;
-  padding: 9px 12px 0 12px;
-
-  > div {
-    display: inline-block;
+  height: 58px;
+  
+  @if $use_new_styles {
+    background: $lightBackground;
+    border-bottom: 1px solid $ic-border-light;
+    height: 112px;
+    padding: $ic-sp;
+    @include breakpoint(wide) { 
+      height: 62px; 
+      display: flex;
+      align-items: center;
+      padding-bottom: 0;
+      padding-top: 0;
+    }
+    .panel__primary {
+      margin-bottom: $ic-sp;
+      @include breakpoint(wide) {
+        margin-bottom: 0;
+        flex: 1;
+        white-space: nowrap;
+      }
+      > * {
+        display: inline-block;
+        white-space: nowrap;
+      }
+    }
+    .panel__secondary {
+      @include breakpoint(wide) { white-space: nowrap; }
+      > div { 
+        display: inline-block;
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+    }
+  }
+  @else {
+    background: #f1f1f1;
+    border-bottom: 1px solid #acacac;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, .2);
+    padding: 9px 12px 0 12px;
+    color: #555;
+    > div { display: inline-block; }
   }
 
   .btn {
@@ -55,7 +101,8 @@
   }
 
   .actions {
-    margin-right: 20px;
+    @if $use_new_styles { margin-right: $ic-sp; }
+    @else { margin-right: 20px; }
   }
 }
 
@@ -67,7 +114,9 @@
 }
 
 .filters {
-  margin-right: 50px;
+  @if $use_new_styles { margin-right: $ic-sp; }
+  @else { margin-right: 50px; }
+  
 
   /* TODO: make sure we still need this with the frd filters (may not be selects) */
   select {
@@ -111,17 +160,38 @@
 }
 
 .search .ac {
-  float: left;
-  width: 250px;
+  display: block;
+  @if $use_new_styles == false {
+    float: left;
+    width: 250px;
+  }
 
   .ac-input-box {
-    border-radius: 16px 0 0 16px;
     float: left;
-    width: 205px;
+    min-height: 0;
+    height: 38px;
+    padding: 6px 12px;
+    @if $use_new_styles {
+      box-sizing: border-box;
+      width: 205px;
+    }
+    @else {
+      border-radius: 16px 0 0 16px;
+      width: 203px;
+    }
+
+    .ac-placeholder {
+      top: 0;
+      line-height: 38px;
+    }
+
+    .ac-clear {
+      top: 8px;
+    }
   }
 
   .ac-input {
-    margin-left: 8px;
+    margin-left: 0;
   }
 
   input {
@@ -129,16 +199,19 @@
   }
 
   .btn {
-    border-radius: 0 16px 16px 0;
     float: left;
-    height: 32px;
+    @if $use_new_styles == false { border-radius: 0 16px 16px 0; }
   }
 }
 
 .messaging-wrapper {
   position: absolute;
-  top: 50px;
   bottom: 0;
+  @if $use_new_styles {
+    top: 112px;
+    @include breakpoint(wide) { top: 62px; }
+  }
+  @else { top: 58px; }
 }
 
 .message-list-scroller {
@@ -149,32 +222,44 @@
 
 .message-list {
   .list-header {
-    background: #f3f3f3;
-    border-bottom: 1px solid #bfbfbf;
-    color: #7f7f7f;
+    color: darken($ic-color-neutral, 50);
     padding: 3px 12px;
+    @if $use_new_styles { 
+      background: $lightBackground;
+      border-bottom: 1px solid $ic-border-light;
+    }
+    @else {
+      background: #f3f3f3;
+      border-bottom: 1px solid #bfbfbf; 
+    }
   }
 
   .current-context-code {
     color: #f3f3f3;
-    background-color: #7f7f7f;
+    background-color: $ic-color-neutral;
     padding: 0 10px;
   }
 
   .messages > li {
-    background: #fff;
-    background: linear-gradient(to bottom, #fff, #fafafa);
+    background: #fff;    
     box-sizing: border-box;
-    border-bottom: 1px solid #bfbfbf;
     cursor: pointer;
     height: 100px;
     padding: 8px 12px 8px 32px;
     position: relative;
-
-    &.active {
-      background: #e5f3ff;
+    @if $use_new_styles {
+      border-bottom: 1px solid $ic-border-light;
+    }
+    @else {
+      border-bottom: 1px solid #bfbfbf;
     }
 
+    &.active {
+      background: $ic-bg-light-primary;
+    }
+    &:hover {
+      background: $ic-bg-light-primary;
+    }
     &:hover .message-actions a, .message-actions a:focus {
       left: 0;
       outline: none;
@@ -189,8 +274,15 @@
     white-space: nowrap;
   }
 
+  h2.author {
+    font-size: 13px;
+    font-weight: bold;
+    line-height: 20px;
+    margin: 0px;
+  }
+
   .date {
-    color: #2571bd;
+    color: $ic-brand-primary;
   }
 
   .summary {
@@ -219,12 +311,24 @@
   }
 }
 
+h3.subject {
+ margin: 0px 0px 8px 0;
+ font-size: 13px;
+ line-height: 20px;
+}
+
+h2.subject {
+  font-size: 13px;
+  font-weight: bold;
+  margin: 0px;
+}
+
 .message-full-participants {
-	display: none;
+  display: none;
 }
 
 .message-summarized-participants:focus, .message-full-participants:focus {
-	outline: 0;
+  outline: 0;
 }
 
 .message-count {
@@ -232,6 +336,8 @@
   position: absolute;
   right: 13px;
   top: 43%;
+  background-color: $ic-brand-secondary;
+  text-shadow: none;
 }
 
 .message-actions {
@@ -248,7 +354,7 @@
   }
 
   .read-state {
-    background: #4aaefb;
+    background: $ic-brand-secondary;
     border-radius: 5px;
     box-sizing: border-box;
     display: inline-block;
@@ -257,18 +363,23 @@
     width: 10px;
 
     &.read {
-      background: #fff;
-      border: 1px solid #8c8d8d;
+      background: $ic-brand-primary;
+      border: 1px solid darken($ic-brand-primary, 10);
+      @if $use_high_contrast {
+        background: $ic-color-light;
+        border: 1px solid $ic-color-dark;
+      }
       left: -9999px;
     }
 
     &:focus {
-      border: 1px solid #333;
+      border: 1px solid $ic-color-dark;
+      box-shadow: none;
     }
   }
 
   .star-btn {
-    color: #999;
+    color: $ic-brand-secondary;
     display: inline-block;
     font-family: 'Hiragino Kaku Gothic Pro', 'Lucida Sans Unicode', 'Arial Unicode MS';
     font-size: 16px;
@@ -292,7 +403,7 @@
         position: absolute;
       }
       &:before {
-        color: #fed676;
+        color: $ic-color-alert;
         content: "\2605";
       }
       &:focus {
@@ -356,10 +467,11 @@
   }
 
   .message-header {
-    border-bottom: 1px solid #bfbfbf;
     height: 40px;
     line-height: 40px;
     padding: 0 12px;
+    @if $use_new_styles { border-bottom: 1px solid $ic-border-light; }
+    @else { border-bottom: 1px solid #bfbfbf; }
 
     .label {
       margin-top: 12px;
@@ -373,19 +485,22 @@
   }
 
   .message-content > li {
-    border-bottom: 1px solid #bfbfbf;
+    
     margin: 0 12px;
     padding: 24px 0;
+    @if $use_new_styles { border-bottom: 1px solid $ic-border-light; }
+    @else { border-bottom: 1px solid #bfbfbf; }
 
     p:last-child {
       margin-bottom: 0;
     }
 
     .message-attachments {
-      border-top: 1px solid #bfbfbf;
       list-style: none;
       margin: 0 1em;
       padding: 0.5em;
+      @if $use_new_styles { border-top: 1px solid $ic-border-light; }
+      @else { border-top: 1px solid #bfbfbf; }
     }
 
     .message-attachment-thumbnail {
@@ -405,7 +520,7 @@
     }
 
     .context {
-      color: #7f7f7f;
+      color: darken($ic-color-neutral, 50);
       display: block;
     }
 
@@ -419,7 +534,7 @@
   }
 
   .date {
-    color: #7f7f7f;
+    color: darken($ic-color-neutral, 50);
     position: absolute;
     right: 10px;
     top: 0;
@@ -441,7 +556,7 @@
 
   .message-detail-actions li a,
   .actions li a {
-    color: #7f7f7f;
+    color: darken($ic-color-neutral, 50);;
 
     &:hover, &:focus {
       color: #333;

@@ -1,7 +1,8 @@
 API: `Route` (component)
 =========================
 
-Configuration component to declare your application's routes and view hierarchy.
+Configuration component to declare your application's routes and entry
+view hierarchy.
 
 Props
 -----
@@ -13,72 +14,40 @@ transition methods.
 
 ### `path`
 
-The path used in the URL, supporting dynamic segments. If left
-undefined, the path will be defined by the `name`, and if there is no
-name, will default to `/`. This path is always absolute from the URL
-"root", even if the leading slash is left off. Nested routes do not
-inherit the path of their parent.
+The path used in the URL. If left undefined, the path will be defined by
+the `name`, and if there is no name, will default to `/`.
+
+Please refer to the [Path Matching Guide][path-matching] to learn more
+about supported path matching syntax.
 
 ### `handler`
 
 The component to be rendered when the route is active.
 
-### `preserveScrollPosition`
-
-If `true`, the router will not scroll the window up when the route is
-transitioned to. Defaults to `false`. Ignored if the parent `<Routes/>`
-has been set to `true`.
-
 ### `children`
 
-Routes can be nested. When a child route matches, the parent route's
-handler will have the child route's handler available as
-`this.props.activeRouteHandler`. You can then render it in the parent
-passing in any additional props as needed.
-
-### `[prop]`
-
-Any additional, user-defined, properties will be become properties of
-the rendered handler.
-
-#### Example:
-
-```js
-var App;
-var foo = "hello";
-
-var routes = (
-  <Routes>
-    // pass `foo` to `something`
-    <Route handler={App} something={foo}/>
-  </Routes>
-);
-
-App = React.createClass({
-  render: function() {
-    // access `something` on props
-    return <div>{this.props.something}</div>
-  }
-});
-
-React.renderComponent(routes, document.body);
-document.body.innerHTML // -> <div>hello</div>
-```
+Routes can be nested. When a child route path matches, the parent route
+is also activated. Please refer to the [overview][overview] since this
+is a very critical part of the router's design.
 
 Example
 -------
 
 ```xml
-<Routes>
-  <!-- path defaults to '/' since no name or path provided -->
-  <Route handler={App}>
-    <!-- path is automatically assigned to the name since it is omitted -->
-    <Route name="about" handler={About}/>
-    <Route name="users" handler={Users}>
-      <!-- note the dynamic segment in the path -->
-      <Route name="user" handler={User} path="/user/:id"/>
-    </Route>
+<!-- `path` defaults to '/' since no name or path provided -->
+<Route handler={App}>
+  <!-- path is automatically assigned to the name since it is omitted -->
+  <Route name="about" handler={About}/>
+  <Route name="users" handler={Users}>
+    <!--
+      note the dynamic segment in the path, and that it starts with `/`,
+      which makes it "absolute", or rather, it doesn't inherit the path
+      from the parent route
+    -->
+    <Route name="user" handler={User} path="/user/:id"/>
   </Route>
-</Routes>
+</Route>
 ```
 
+  [overview]:/docs/guides/overview.md
+  [path-matching]:/docs/guides/path-matching.md

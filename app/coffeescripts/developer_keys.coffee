@@ -7,7 +7,7 @@ define [
   'jquery.ajaxJSON'
   'jquery.instructure_date_and_time'
   'jqueryui/dialog'
-], (I18n, $, developer_key, developer_key_form, preventDefault) ->
+], (I18n, $, developer_key, developerKeyFormTemplate, preventDefault) ->
   page = 0
   buildKey = (key) ->
     key.icon_image_url = key.icon_url || "/images/blank.png"
@@ -18,9 +18,18 @@ define [
     key.last_access = $.datetimeString(key.last_access_at)
     $key = $(developer_key(key));
     $key.data('key', key)
-    
+
   buildForm = (key, $orig) ->
-    $form = $(developer_key_form(key || {}))
+    key = key || {}
+
+    if !key.id && isAccountAdminLevel
+      key._formAction = accountEndpoint()
+    else
+      key._formAction = siteAdminEndpoint()
+
+
+
+    $form = $(developerKeyFormTemplate(key))
     $form.formSubmit({
       beforeSubmit: ->
         $("#edit_dialog button.submit").text(I18n.t('button.saving', "Saving Key..."))
@@ -36,14 +45,31 @@ define [
         $("#edit_dialog button.submit").text(I18n.t('button.saving_failed', "Saving Key Failed"))
     })
     return $form
+
+  siteAdminEndpoint = ->
+    return '/api/v1/developer_keys'
+
+  accountEndpoint = ->
+    return "/api/v1/accounts/self/developer_keys"
+
+  isAccountAdminLevel = ->
+    return window.location.pathname.indexOf('/accounts') == 0
+
+  apiEndpoint = ->
+    if isAccountAdminLevel()
+      return accountEndpoint()
+
+    return siteAdminEndpoint()
+
+
   nextPage = ->
     $("#loading").attr('class', 'loading')
     page++
-    req = $.ajaxJSON('/api/v1/developer_keys?page=' + page, 'GET', {}, (data) ->
+    req = $.ajaxJSON(apiEndpoint() + '?page=' + page, 'GET', {}, (data) ->
       for key in data
         $key = buildKey(key)
         $("#keys tbody").append($key)
-      if req.getAllResponseHeaders().match /rel="next"/ 
+      if req.getAllResponseHeaders().match /rel="next"/
         if page > 1
           nextPage()
         else
@@ -72,7 +98,7 @@ define [
     $form = buildForm()
     $("#edit_dialog").empty().append($form).dialog('open')
   )
-  $("#edit_dialog").html(developer_key_form({})).dialog({
+  $("#edit_dialog").html(developerKeyFormTemplate({})).dialog({
     autoOpen: false,
     width: 350
   }).on('click', '.cancel', () ->

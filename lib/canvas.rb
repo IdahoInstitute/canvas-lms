@@ -1,17 +1,17 @@
+require_dependency 'canvas/draft_state_validations'
+
 module Canvas
   # defines the behavior when a protected attribute is assigned to in mass
   # assignment. The default, and Rails' normal behavior, is to just :log. Set
   # this to :raise to raise an exception.
   mattr_accessor :protected_attribute_error
 
-  # defines extensions that could possibly be used, so that specs can move them to the
-  # correct schemas for sharding
-  mattr_accessor :possible_postgres_extensions
-  self.possible_postgres_extensions = [:pg_collkey, :pg_trgm]
-
   def self.active_record_foreign_key_check(name, type, options)
     if name.to_s =~ /_id\z/ && type.to_s == 'integer' && options[:limit].to_i < 8
-      raise ArgumentError, "All foreign keys need to be 8-byte integers. #{name} looks like a foreign key to me, please add this option: `:limit => 8`"
+      raise ArgumentError, <<-EOS
+        All foreign keys need to be at least 8-byte integers. #{name}
+        looks like a foreign key, please add this option: `:limit => 8`
+      EOS
     end
   end
 
@@ -43,11 +43,6 @@ module Canvas
     end
   end
 
-  def self.cache_store_config(rails_env = :current, nil_is_nil = true)
-    rails_env = Rails.env if rails_env == :current
-    cache_stores[rails_env]
-  end
-
   def self.cache_stores
     unless @cache_stores
       # this method is called really early in the bootup process, and
@@ -59,12 +54,21 @@ module Canvas
 
       # sanity check the file
       unless configs.is_a?(Hash)
-        raise "Invalid config/cache_store.yml: Root is not a hash. See comments in config/cache_store.yml.example"
+        raise <<-EOS
+          Invalid config/cache_store.yml: Root is not a hash. See comments in
+          config/cache_store.yml.example
+        EOS
       end
 
       non_hashes = configs.keys.select { |k| !configs[k].is_a?(Hash) }
       non_hashes.reject! { |k| configs[k].is_a?(String) && configs[configs[k]].is_a?(Hash) }
-      raise "Invalid config/cache_store.yml: Some keys are not hashes: #{non_hashes.join(', ')}. See comments in config/cache_store.yml.example" unless non_hashes.empty?
+      unless non_hashes.empty?
+        raise <<-EOS
+          Invalid config/cache_store.yml: Some keys are not hashes:
+          #{non_hashes.join(', ')}. See comments in
+          config/cache_store.yml.example
+        EOS
+      end
 
       configs.each do |env, config|
         if config.is_a?(String)
@@ -84,16 +88,24 @@ module Canvas
           Bundler.require 'redis'
           require_dependency 'canvas/redis'
           Canvas::Redis.patch
-          # merge in redis.yml, but give precedence to cache_store.yml
-          #
-          # the only options currently supported in redis-cache are the list of
-          # servers, not key prefix or database names.
-          config = (ConfigFile.load('redis', env) || {}).merge(config)
-          config_options = config.symbolize_keys.except(:key, :servers, :database)
-          servers = config['servers']
-          if servers
-            servers = config['servers'].map { |s| Canvas::RedisConfig.url_to_redis_options(s).merge(config_options) }
-            @cache_stores[env] = :redis_store, servers
+          # if cache and redis data are configured identically, we want to share connections
+          if config == {} && env == Rails.env && Canvas.redis_enabled?
+            # A bit of gymnastics to wrap an existing Redis::Store into an ActiveSupport::Cache::RedisStore
+            store = ActiveSupport::Cache::RedisStore.new([])
+            store.instance_variable_set(:@data, Canvas.redis.__getobj__)
+            @cache_stores[env] = store
+          else
+            # merge in redis.yml, but give precedence to cache_store.yml
+            #
+            # the only options currently supported in redis-cache are the list of
+            # servers, not key prefix or database names.
+            config = (ConfigFile.load('redis', env) || {}).merge(config)
+            config_options = config.symbolize_keys.except(:key, :servers, :database)
+            servers = config['servers']
+            if servers
+              servers = config['servers'].map { |s| Canvas::RedisConfig.url_to_redis_options(s).merge(config_options) }
+              @cache_stores[env] = :redis_store, servers
+            end
           end
         when 'memory_store'
           @cache_stores[env] = :memory_store
@@ -129,11 +141,13 @@ module Canvas
 
   # can be called by plugins to allow reloading of that plugin in dev mode
   # pass in the path to the plugin directory
-  # e.g., in the vendor/plugins/<plugin_name>/init.rb:
+  # e.g., in the vendor/plugins/<plugin_name>/init.rb or
+  # gems/plugins/<plugin_name>/lib/<plugin_name>/engine.rb:
   #     Canvas.reloadable_plugin(File.dirname(__FILE__))
   def self.reloadable_plugin(dirname)
     return unless Rails.env.development?
     base_path = File.expand_path(dirname)
+    base_path.gsub(%r{/lib/[^/]*$}, '')
     ActiveSupport::Dependencies.autoload_once_paths.reject! { |p|
       p[0, base_path.length] == base_path
     }
@@ -146,6 +160,10 @@ module Canvas
     else
       nil
     end
+  end
+
+  def self.timeout_protection_error_ttl(service_name)
+    (Setting.get("service_#{service_name}_error_ttl", nil) || Setting.get("service_generic_error_ttl", 1.minute.to_s)).to_i
   end
 
   # protection against calling external services that could timeout or misbehave.
@@ -164,7 +182,7 @@ module Canvas
     if Canvas.redis_enabled?
       redis_key = "service:timeouts:#{service_name}"
       cutoff = (Setting.get("service_#{service_name}_cutoff", nil) || Setting.get("service_generic_cutoff", 3.to_s)).to_i
-      error_ttl = (Setting.get("service_#{service_name}_error_ttl", nil) || Setting.get("service_generic_error_ttl", 1.minute.to_s)).to_i
+      error_ttl = timeout_protection_error_ttl(service_name)
       short_circuit_timeout(Canvas.redis, redis_key, timeout, cutoff, error_ttl, &block)
     else
       Timeout.timeout(timeout, &block)
@@ -174,21 +192,19 @@ module Canvas
     raise if options[:raise_on_timeout]
     return nil
   rescue Timeout::Error => e
-    ErrorReport.log_exception(:service_timeout, e)
+    Canvas::Errors.capture_exception(:service_timeout, e)
     raise if options[:raise_on_timeout]
     return nil
   end
 
-  def self.short_circuit_timeout(redis, redis_key, timeout, cutoff, error_ttl)
+  def self.short_circuit_timeout(redis, redis_key, timeout, cutoff, error_ttl, &block)
     error_count = redis.get(redis_key)
     if error_count.to_i >= cutoff
       raise TimeoutCutoff.new(error_count)
     end
 
     begin
-      Timeout.timeout(timeout) do
-        yield
-      end
+      Timeout.timeout(timeout, &block)
     rescue Timeout::Error => e
       redis.incrby(redis_key, 1)
       redis.expire(redis_key, error_ttl)

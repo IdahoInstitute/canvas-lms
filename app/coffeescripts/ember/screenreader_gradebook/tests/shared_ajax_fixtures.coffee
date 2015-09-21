@@ -336,7 +336,7 @@ define [
               published: true
               muted: false
               only_visible_to_overrides: true
-              assignment_visibility: [1]
+              assignment_visibility: ["1"]
             }
             {
               id: '2'
@@ -350,7 +350,7 @@ define [
               published: true
               muted: true
               only_visible_to_overrides: true
-              assignment_visibility: [2]
+              assignment_visibility: ["2"]
             }
             {
               id: '3'
@@ -363,6 +363,7 @@ define [
               assignment_group_id:'1'
               published: true
               muted: false
+              assignment_visibility: ["1","2","3"]
             }
           ]
         }
@@ -526,13 +527,13 @@ define [
   ]
 
   outcomesRaw = [
-    { outcome: { id: '1', title: 'Eating' } }
-    { outcome: { id: '2', title: 'Drinking' } }
+    { outcome: { id: '1', title: 'Eating' , mastery_points: 3} }
+    { outcome: { id: '2', title: 'Drinking', mastery_points: 5 } }
   ]
 
   outcomes = [
-    { id: '1', title: 'Eating' }
-    { id: '2', title: 'Drinking' }
+    { id: '1', title: 'Eating', mastery_points: 3 }
+    { id: '2', title: 'Drinking', mastery_points: 5 }
   ]
 
   outcomeRollupsRaw = {

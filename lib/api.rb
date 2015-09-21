@@ -236,11 +236,16 @@ module Api
   # Add [link HTTP Headers](http://www.w3.org/Protocols/9707-link-header.html) for pagination
   # The collection needs to be a will_paginate collection (or act like one)
   # a new, paginated collection will be returned
-  def self.paginate(collection, controller, base_url, pagination_args = {})
+  def self.paginate(collection, controller, base_url, pagination_args = {}, response_args = {})
     collection = paginate_collection!(collection, controller, pagination_args)
-    links = build_links(base_url, meta_for_pagination(controller, collection))
+    hash = build_links_hash(base_url, meta_for_pagination(controller, collection))
+    links = build_links_from_hash(hash)
     controller.response.headers["Link"] = links.join(',') if links.length > 0
-    collection
+    if response_args[:enhanced_return]
+      {hash: hash, collection: collection}
+    else
+      collection
+    end
   end
 
   # Returns collection as the first return value, and the meta information hash
@@ -315,6 +320,10 @@ module Api
   EXCLUDE_IN_PAGINATION_LINKS = %w(page per_page access_token api_key)
   def self.build_links(base_url, opts={})
     links = build_links_hash(base_url, opts)
+    build_links_from_hash(links)
+  end
+
+  def self.build_links_from_hash(links)
     # iterate in order, but only using the keys present from build_links_hash
     (PAGINATION_PARAMS & links.keys).map do |k|
       v = links[k]
@@ -379,14 +388,30 @@ module Api
     end
   end
 
-  def api_user_content(html, context = @context, user = @current_user, preloaded_attachments = {})
+  PLACEHOLDER_PROTOCOL = 'https'
+  PLACEHOLDER_HOST = 'placeholder.invalid'
+
+  def get_host_and_protocol_from_request
+    [ request.host_with_port, request.ssl? ? 'https' : 'http' ]
+  end
+
+  def resolve_placeholders(content)
+    host, protocol = get_host_and_protocol_from_request
+    # content is a json-encoded string; slashes are escaped
+    content.gsub("#{PLACEHOLDER_PROTOCOL}:\\/\\/#{PLACEHOLDER_HOST}", "#{protocol}:\\/\\/#{host}")
+  end
+
+  def api_user_content(html, context = @context, user = @current_user, preloaded_attachments = {}, is_public=false)
     return html if html.blank?
 
-    # if we're a controller, use the host of the request, otherwise let HostUrl
-    # figure out what host is appropriate
-    if self.is_a?(ApplicationController)
-      host = request.host_with_port
-      protocol = request.ssl? ? 'https' : 'http'
+    # use the host of the request if available;
+    # use a placeholder host for pre-generated content, which we will replace with the request host when available;
+    # otherwise let HostUrl figure out what host is appropriate
+    if self.respond_to?(:request)
+      host, protocol = get_host_and_protocol_from_request
+    elsif self.respond_to?(:use_placeholder_host?) && use_placeholder_host?
+      host = PLACEHOLDER_HOST
+      protocol = PLACEHOLDER_PROTOCOL
     else
       host = HostUrl.context_host(context, @account_domain.try(:host))
       protocol = HostUrl.protocol
@@ -402,10 +427,19 @@ module Api
                   context.attachments.find_by_id(match.obj_id)
                 end
       end
-      next unless obj && rewriter.user_can_view_content?(obj)
+
+      unless obj && ((is_public && !obj.locked_for?(user)) || obj.grants_right?(user, nil, :download))
+        if obj && obj.previewable_media? && (uri = URI.parse(match.url) rescue nil)
+          uri.query = (uri.query.to_s.split("&") + ["no_preview=1"]).join("&")
+          next uri.to_s
+        else
+          next
+        end
+      end
 
       if ["Course", "Group", "Account", "User"].include?(obj.context_type)
-        opts = {:verifier => obj.uuid, :only_path => true}
+        opts = {:only_path => true}
+        opts.merge!(:verifier => obj.uuid) unless respond_to?(:in_app?, true) && in_app? && !is_public
         if match.rest.start_with?("/preview")
           url = self.send("#{obj.context_type.downcase}_file_preview_url", obj.context_id, obj.id, opts)
         else
@@ -414,7 +448,9 @@ module Api
           url = self.send("#{obj.context_type.downcase}_file_download_url", obj.context_id, obj.id, opts)
         end
       else
-        url = file_download_url(obj.id, :verifier => obj.uuid, :download => '1', :only_path => true)
+        opts = {:download => '1', :only_path => true}
+        opts.merge!(:verifier => obj.uuid) unless respond_to?(:in_app?, true) && in_app? && !is_public
+        url = file_download_url(obj.id, opts)
       end
       url
     end
@@ -441,9 +477,11 @@ module Api
   end
 
   def self.invalid_time_stamp_error(attribute, message)
-    ErrorReport.log_error('invalid_date_time',
-                          message: "invalid #{attribute}",
-                          exception_message: message)
+    Canvas::Errors.capture(
+      'invalid_date_time',
+      message: "invalid #{attribute}",
+      exception_message: message
+    )
   end
 
   # regex for valid iso8601 dates

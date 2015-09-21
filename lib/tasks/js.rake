@@ -6,6 +6,7 @@ namespace :js do
   desc 'run testem as you develop, can use `rake js:dev <ember app name> <browser>`'
   task :dev do
     app = ARGV[1]
+    app = nil if app == 'NA'
     #browsers = ARGV[2] || 'Firefox,Chrome,Safari'
     browsers = ARGV[2] || 'Chrome'
     if app
@@ -37,6 +38,17 @@ namespace :js do
     build_requirejs_config
   end
 
+  def generate_prng
+    if ENV["seed"]
+      seed = ENV["seed"].to_i
+    else
+      srand
+      seed = rand(1 << 20)
+    end
+    puts "--> randomized with seed #{seed}"
+    Random.new(seed)
+  end
+
   def build_requirejs_config
     require 'canvas/require_js'
     require 'erubis'
@@ -51,7 +63,7 @@ namespace :js do
       "spec/plugins/*/javascripts/compiled/#{matcher}"
     ].map{ |file| file.sub(/\.js$/, '').sub(/public\/javascripts\//, '') }
     File.open("#{Rails.root}/spec/javascripts/tests.js", 'w') { |f|
-      f.write("window.__TESTS__ = #{JSON.pretty_generate(tests)}")
+      f.write("window.__TESTS__ = #{JSON.pretty_generate(tests.shuffle(random: generate_prng))}")
     }
   end
 
@@ -84,7 +96,7 @@ namespace :js do
   end
 
   def test_suite(reporter=nil)
-    if test_js_with_timeout(300,reporter) != 0 && !ENV['JS_SPEC_MATCHER']
+    if test_js_with_timeout(300,reporter) != 0 && !ENV['JS_SPEC_MATCHER'] && ENV['retry'] != 'false'
       puts "--> Karma tests failed." # retrying karma...
       raise "Karma tests failed on second attempt." if test_js_with_timeout(400,reporter) != 0
     end
@@ -148,9 +160,9 @@ namespace :js do
       Dir.chdir(app_dir) do
         puts "Building client app '#{app_name}'"
 
-        begin
+        if File.exists?('./package.json')
           puts "\tRunning 'npm install'..."
-          output = `npm install`
+          output = `npm install` rescue `npm cache clean && npm install`
           unless $?.exitstatus == 0
             puts <<-MESSAGE
             -------------------------------------------------------------------
@@ -165,7 +177,7 @@ namespace :js do
 
         begin
           puts "\tRunning 'npm run build'..."
-          output = `npm run build`
+          output = `./script/build`
           unless $?.exitstatus == 0
             puts <<-MESSAGE
             -------------------------------------------------------------------
@@ -182,7 +194,7 @@ namespace :js do
       end
     end
 
-    maintain_client_app_symlinks('public/javascripts')
+    maintain_client_app_symlinks
   end
 
   desc "generates compiled coffeescript, handlebars templates and plugin extensions"
@@ -196,8 +208,8 @@ namespace :js do
     # clear out all the files in case there are any old compiled versions of
     # files that don't map to any source file anymore
     paths_to_remove = [
-      Dir.glob('public/javascripts/{compiled,jst}'),
-      Dir.glob('public/plugins/*/javascripts/{compiled,jst}'),
+      Dir.glob('public/javascripts/{compiled,jst,jsx}'),
+      Dir.glob('public/plugins/*/javascripts/{compiled,jst,jsx}'),
       'spec/javascripts/compiled',
       Dir.glob('spec/plugins/*/javascripts/compiled')
     ]
@@ -210,6 +222,12 @@ namespace :js do
       puts "--> Generating plugin extensions"
       extensions_time = Benchmark.realtime { Rake::Task['js:generate_extensions'].invoke }
       puts "--> Generating plugin extensions finished in #{extensions_time}"
+    end
+
+    threads << Thread.new do
+      puts "--> Compiling React JSX"
+      jsx_time = Benchmark.realtime { Rake::Task['js:jsx'].invoke }
+      puts "--> Compiling React JSX finished in #{jsx_time}"
     end
 
     threads << Thread.new do
@@ -232,6 +250,7 @@ namespace :js do
     threads << Thread.new do
       coffee_time = Benchmark.realtime do
         require 'coffee-script'
+        require 'parallel'
 
         if Canvas::CoffeeScript.coffee_script_binary_is_available?
           puts "--> Compiling CoffeeScript with 'coffee' binary"
@@ -240,8 +259,7 @@ namespace :js do
           Parallel.each(dirs, :in_threads => Parallel.processor_count) do |dir|
             destination = coffee_destination(dir)
             FileUtils.mkdir_p(destination)
-            flags = "-m" if ENV["CANVAS_SOURCE_MAPS"] != "0"
-            system("coffee #{flags} -c -o #{destination} #{dir}/*.coffee")
+            system("coffee -c -o #{destination} #{dir}/*.coffee")
             raise "Unable to compile coffeescripts in #{dir}" if $?.exitstatus != 0
           end
         else
@@ -283,6 +301,22 @@ namespace :js do
     puts "--> Compressed JavaScript in #{optimize_time}"
   end
 
+  desc "Compile React JSX to JS"
+  task :jsx do
+    source = Rails.root + 'app/jsx'
+    dest = Rails.root + 'public/javascripts/jsx'
+    if Rails.env == 'development'
+      #npm_run "jsx -x jsx --source-map-inline --harmony #{source} #{dest} 2>&1 >/dev/null"
+      msg = `node_modules/react-tools/bin/jsx -x jsx --source-map-inline --harmony #{source} #{dest} 2>&1 >/dev/null`
+    else
+      msg = `node_modules/react-tools/bin/jsx -x jsx --harmony #{source} #{dest} 2>&1 >/dev/null`
+    end
+
+    unless $?.success?
+      raise msg
+    end
+  end
+
   desc "creates ember app bundles"
   task :bundle_ember_apps do
     require 'lib/ember_bundle'
@@ -290,5 +324,14 @@ namespace :js do
       EmberBundle.new(app).build
     end
   end
+
+  #def npm_run(command)
+    #puts "Running npm script `#{command}`"
+    #msg = `$(npm bin)/#{command} 2>&1`
+    #unless $?.success?
+      #raise msg
+    #end
+    #msg
+  #end
 
 end

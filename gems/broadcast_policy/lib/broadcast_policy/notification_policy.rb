@@ -34,57 +34,29 @@ module BroadcastPolicy
     # This now sets a series of temporary flags while working for audit
     # reasons.
     def broadcast(record)
-      if (record.skip_broadcasts rescue false)
-        record.messages_failed[self.dispatch] = "Broadcasting explicitly skipped"
-        return false
-      end
-      begin
-        meets_condition = record.instance_eval &self.whenever
-      rescue
-        meets_condition = false
-        record.messages_failed[self.dispatch] = "Error thrown attempting to meet condition."
-        return false
-      end
+      return if record.respond_to?(:skip_broadcasts) && record.skip_broadcasts
+      return unless record.instance_eval &self.whenever
 
-      unless meets_condition
-        record.messages_failed[self.dispatch] = "Did not meet condition."
-        return false
-      end
       notification = BroadcastPolicy.notification_finder.by_name(self.dispatch)
-      # logger.warn "Could not find notification for #{record.inspect}" unless notification
-      unless notification
-        record.messages_failed[self.dispatch] = "Could not find notification: #{self.dispatch}."
-        return false
-      end
-      # self.consolidated_notifications[notification_name.to_s.titleize] rescue nil
-      begin
-        to_list = record.instance_eval &self.to
-      rescue
-        to_list = nil
-        record.messages_failed[self.dispatch] = "Error thrown attempting to generate a recipient list."
-        return false
-      end
-      unless to_list
-        record.messages_failed[self.dispatch] = "Could not generate a recipient list."
-        return false
-      end
-      to_list = Array[to_list].flatten
+      return if notification.nil?
 
-      begin
-        asset_context = record.instance_eval &self.context if self.context
-      rescue
-        record.messages_failed[self.dispatch] = "Error thrown attempting to get asset_context."
-        return false
-      end
+      record.connection.after_transaction_commit do
+        to_list = record.instance_eval(&self.to)
+        to_list = Array(to_list).flatten
+        next if to_list.empty?
 
-      begin
-        data = record.instance_eval &self.data if self.data
-      rescue
-        record.messages_failed[self.dispatch] = "Error thrown attempting to get data."
-        return false
-      end
+        asset_context = record.instance_eval(&self.context) if self.context
+        data = record.instance_eval(&self.data) if self.data
 
-      BroadcastPolicy.notifier.send_notification(record, self.dispatch, notification, to_list, asset_context, data)
+        BroadcastPolicy.notifier.send_notification(
+          record,
+          self.dispatch,
+          notification,
+          to_list,
+          asset_context,
+          data
+        )
+      end
     end
 
   end

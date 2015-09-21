@@ -30,7 +30,7 @@ class CountsReport
 
   def initialize
     date = Date.yesterday
-    @yesterday = Time.parse("#{date.to_s} 23:59:00 UTC")
+    @yesterday = Time.parse("#{date} 23:59:00 UTC")
     @week = date.cweek
     @timestamp = @yesterday
     @overview = {:generated_at=>@timestamp, :totals => new_counts_hash}.with_indifferent_access
@@ -40,10 +40,11 @@ class CountsReport
   end
 
   def process
-    start_time = Time.now
+    start_time = Time.zone.now
 
     Shackles.activate(:slave) do
-      Shard.with_each_shard(exception: -> { Shard.default.activate { ErrorReport.log_exception(:periodic_job, $!) } }) do
+      callback = -> { Shard.default.activate { Canvas::Errors.capture_exception(:periodic_job, $ERROR_INFO) } }
+      Shard.with_each_shard(exception: callback) do
         Account.root_accounts.active.each do |account|
           next if account.external_status == 'test'
 
@@ -67,7 +68,7 @@ class CountsReport
           else
             timespan = Setting.get('recently_logged_in_timespan', 30.days.to_s).to_i.seconds
             enrollment_scope = Enrollment.active.not_fake.
-              joins("INNER JOIN pseudonyms ON enrollments.user_id=pseudonyms.user_id").
+              joins("INNER JOIN #{Pseudonym.quoted_table_name} ON enrollments.user_id=pseudonyms.user_id").
               where(pseudonyms: { workflow_state: 'active'}).
               where("course_id IN (?) AND pseudonyms.last_request_at>?", course_ids, timespan.ago)
 
@@ -76,7 +77,7 @@ class CountsReport
             data[:users] = enrollment_scope.count(:user_id, :distinct => true)
 
             # ActiveRecord::Base.calculate doesn't support multiple calculations in account single pass
-            data[:files], data[:files_size] = Attachment.connection.select_rows("SELECT COUNT(id), SUM(size) FROM #{Attachment.table_name} WHERE namespace='account_%s' AND root_attachment_id IS NULL AND file_state != 'deleted'" % [account.id]).first.map(&:to_i)
+            data[:files], data[:files_size] = Attachment.connection.select_rows("SELECT COUNT(id), SUM(size) FROM #{Attachment.table_name} WHERE namespace IN ('account_%s','account_%s') AND root_attachment_id IS NULL AND file_state != 'deleted'" % [account.local_id, account.global_id]).first.map(&:to_i)
             data[:media_files], data[:media_files_size] = MediaObject.connection.select_rows("SELECT COUNT(id), SUM(total_size) FROM #{MediaObject.table_name} WHERE root_account_id='%s' AND attachment_id IS NULL AND workflow_state != 'deleted'" % [account.id]).first.map(&:to_i)
             data[:media_files_size] *= 1000
           end

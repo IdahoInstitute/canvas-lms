@@ -31,11 +31,12 @@ define [
       groupDetailView = new GroupDetailView {model: group, users}
       view = new GroupView {groupUsersView, groupDetailView, model: group}
       view.render()
-      view.$el.appendTo($(document.body))
+      view.$el.appendTo($("#fixtures"))
 
     teardown: ->
       fakeENV.teardown()
       view.remove()
+      document.getElementById("fixtures").innerHTML = ""
 
   assertCollapsed = (view) ->
     ok view.$el.hasClass('group-collapsed'), 'expand visible'
@@ -65,8 +66,7 @@ define [
       'Content-Type': 'application/json'
       JSON.stringify {}
     ]
-    confirmStub = sinon.stub window, 'confirm'
-    confirmStub.returns true
+    @stub window, 'confirm', -> true
 
     # when
     view.$('.delete-group').click()
@@ -75,4 +75,3 @@ define [
     ok not view.$el.hasClass('hidden'), 'group hidden'
 
     server.restore()
-    confirmStub.restore()

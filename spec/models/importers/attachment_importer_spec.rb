@@ -27,7 +27,13 @@ module Importers
       let(:migration) { ContentMigration.new(context: course) }
       let(:migration_id) { '123' }
       let(:attachment_id) { 456 }
-      let(:attachment) { stub(:context= => true, :migration_id= => true, :save_without_broadcasting! => true) }
+      let(:attachment) do
+        stub(:context= => true,
+             :migration_id= => true,
+             :migration_id => migration_id,
+             :save_without_broadcasting! => true,
+             :set_publish_state_for_usage_rights => nil)
+      end
 
       before :each do
         course.stubs(:id).returns(course_id)
@@ -55,7 +61,7 @@ module Importers
 
         Importers::AttachmentImporter.process_migration(data, migration)
 
-        migration.imported_migration_items.should == [attachment]
+        expect(migration.imported_migration_items).to eq [attachment]
       end
 
       it "imports attachments when the migration id is in the files_to_import hash" do

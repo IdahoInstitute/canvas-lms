@@ -25,18 +25,19 @@ describe "Importing Groups" do
       it "should import from #{system}" do
         data = get_import_data(system, 'group')
         context = get_import_context(system)
+        migration = context.content_migrations.create!
 
         data[:groups_to_import] = {}
-        Importers::GroupImporter.import_from_migration(data, context).should be_nil
-        context.groups.count.should == 0
+        expect(Importers::GroupImporter.import_from_migration(data, context, migration)).to be_nil
+        expect(context.groups.count).to eq 0
 
         data[:groups_to_import][data[:migration_id]] = true
-        Importers::GroupImporter.import_from_migration(data, context)
-        Importers::GroupImporter.import_from_migration(data, context)
-        context.groups.count.should == 1
-        g = Group.find_by_migration_id(data[:migration_id])
+        Importers::GroupImporter.import_from_migration(data, context, migration)
+        Importers::GroupImporter.import_from_migration(data, context, migration)
+        expect(context.groups.count).to eq 1
+        g = Group.where(migration_id: data[:migration_id]).first
 
-        g.name.should == data[:title]
+        expect(g.name).to eq data[:title]
       end
     end
   end
@@ -44,35 +45,38 @@ describe "Importing Groups" do
   it "should attach to a discussion" do
     data = get_import_data('bb8', 'group')
     context = get_import_context('bb8')
+    migration = context.content_migrations.create!
 
-    Importers::GroupImporter.import_from_migration(data, context)
-    context.groups.count.should == 1
+    Importers::GroupImporter.import_from_migration(data, context, migration)
+    expect(context.groups.count).to eq 1
 
     category = get_import_data('bb8', 'group_discussion')
 
     category['topics'].each do |topic|
       topic['group_id'] = category['group_id']
-      group = Group.find_by_context_id_and_context_type_and_migration_id(context.id, context.class.to_s, topic['group_id'])
+      group = Group.where(context_id: context, context_type: context.class.to_s, migration_id: topic['group_id']).first
       if group
-        Importers::DiscussionTopicImporter.import_from_migration(topic, group)
+        Importers::DiscussionTopicImporter.import_from_migration(topic, group, migration)
       end
     end
 
-    group = Group.find_by_migration_id(data[:migration_id])
-    group.discussion_topics.count.should == 1
+    group = Group.where(migration_id: data[:migration_id]).first
+    expect(group.discussion_topics.count).to eq 1
   end
 
   it "should respect group_category from the hash" do
     course_with_teacher
+    migration = @course.content_migrations.create!
     group = @course.groups.build
-    Importers::GroupImporter.import_from_migration({:group_category => "random category"}, @course, nil, group)
-    group.group_category.name.should == "random category"
+    Importers::GroupImporter.import_from_migration({:group_category => "random category"}, @course, migration, group)
+    expect(group.group_category.name).to eq "random category"
   end
 
   it "should default group_category to imported if not in the hash" do
     course_with_teacher
+    migration = @course.content_migrations.create!
     group = @course.groups.build
-    Importers::GroupImporter.import_from_migration({}, @course, nil, group)
-    group.group_category.should == GroupCategory.imported_for(@course)
+    Importers::GroupImporter.import_from_migration({}, @course, migration, group)
+    expect(group.group_category).to eq GroupCategory.imported_for(@course)
   end
 end

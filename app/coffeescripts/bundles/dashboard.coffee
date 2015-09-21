@@ -2,19 +2,29 @@ require [
   'underscore'
   'Backbone',
   'jquery',
+  'react',
   'i18n!dashboard'
   'compiled/util/newCourseForm'
   'jst/dashboard/show_more_link'
+  'jsx/dashboard_card/RecentActivityToggle'
   'jquery.disableWhileLoading'
-], (_, {View}, $, I18n, newCourseForm, showMoreTemplate) ->
+], (_, {View}, $, React, I18n, newCourseForm, showMoreTemplate, RecentActivityToggle) ->
 
   if ENV.DASHBOARD_SIDEBAR_URL
     rightSide = $('#right-side')
     rightSide.disableWhileLoading(
-      $.get ENV.DASHBOARD_SIDEBAR_URL , (data) ->
-        rightSide.html data
+      $.get ENV.DASHBOARD_SIDEBAR_URL , (html) ->
+        rightSide.html html
         newCourseForm()
     )
+
+  recentActivityToggleContainer =
+    document.getElementById('RecentActivityToggle_Container')
+  if recentActivityToggleContainer?
+    toggleElement = React.createElement(RecentActivityToggle, {
+      recent_activity_dashboard: ENV.PREFERENCES.recent_activity_dashboard
+    })
+    React.render(toggleElement, recentActivityToggleContainer)
 
   class DashboardView extends View
 
@@ -24,6 +34,7 @@ require [
       'click .stream_header': 'toggleDetails'
       'click .stream_header .links a': 'stopPropagation'
       'click .stream-details': 'handleDetailsClick'
+      'click .close_conference_link': 'closeConference'
       'beforeremove': 'updateCategoryCounts' # ujsLinks event
 
     initialize: ->
@@ -111,5 +122,12 @@ require [
         parent.remove()
       @setShowMoreLink $(event.target).closest('.stream-category')
 
+    closeConference: (e) ->
+      e.preventDefault()
+      return if !confirm(I18n.t('confirm.close', "Are you sure you want to end this conference?\n\nYou will not be able to reopen it."))
+      link = $(e.currentTarget)
+      $.ajaxJSON(link.attr('href'), "POST", {}, (data) =>
+        link.parents('.ic-notification.conference').hide()
+      )
   new DashboardView
 

@@ -24,6 +24,7 @@ define([
   'quiz_inputs',
   'compiled/models/Quiz',
   'compiled/views/PublishButtonView',
+  'compiled/quizzes/dump_events',
   'jquery.instructure_date_and_time' /* dateString, time_field, datetime_field */,
   'jqueryui/dialog',
   'compiled/jquery/fixDialogButtons',
@@ -32,17 +33,20 @@ define([
   'jquery.instructure_misc_plugins' /* ifExists, confirmDelete */,
   'jquery.disableWhileLoading',
   'message_students' /* messageStudents */
-], function(I18n, $, MessageStudentsDialog, showAnswerArrows, inputMethods, Quiz, PublishButtonView) {
+], function(I18n, $, MessageStudentsDialog, showAnswerArrows, inputMethods, Quiz, PublishButtonView, QuizLogAuditingEventDumper) {
 
 
   $(document).ready(function () {
+    if(ENV.QUIZ_SUBMISSION_EVENTS_URL) {
+      QuizLogAuditingEventDumper(true);
+    }
 
     function ensureStudentsLoaded(callback) {
       if ($('#quiz_details').length) {
         return callback();
       } else {
-        return $.get($("#quiz_details_wrapper").data('url'), function(data) {
-          $("#quiz_details_wrapper").html(data);
+        return $.get($("#quiz_details_wrapper").data('url'), function(html) {
+          $("#quiz_details_wrapper").html(html);
           callback();
         });
       };
@@ -148,6 +152,8 @@ define([
         return false;
       });
 
+      var $lock_at = $(this).find('.datetime_field');
+
       $unlock_for_how_long_dialog.dialog({
         autoOpen: false,
         modal: true,
@@ -155,16 +161,16 @@ define([
         width: 400,
         buttons: {
           'Unlock' : function(){
-            var dateString = $(this).find('.datetime_suggest').text();
-
             $('#quiz_unlock_form')
               // append this back to the form since it got moved to be a child of body when we called .dialog('open')
               .append($(this).dialog('destroy'))
-              .find('#quiz_lock_at').val(dateString).end()
+              .find('#quiz_lock_at').val($lock_at.data('iso8601')).end()
               .submit();
           }
         }
-      }).find('.datetime_field').datetime_field();
+      });
+
+      $lock_at.datetime_field();
     });
 
     $('#lock_this_quiz_now_link').ifExists(function($link) {

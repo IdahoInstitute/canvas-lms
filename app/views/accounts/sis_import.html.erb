@@ -17,7 +17,7 @@
       "For a description of how to generate these zip files, [please see this documentation](%{url}).",
       :url => "/doc/api/sis_csv.html") %></p>
       <div>
-        <input type="file" name="attachment" style="font-size: 1.2em;"/><br/>
+        <input type="file" name="attachment" style="font-size: 1.2em;"/><p/>
         <label for="import_type"><%= before_label(t(:import_type_label, "Import type")) %></label>
         <select id="import_type" name="import_type">
           <% SisBatch.valid_import_types.each do |type, data| %>
@@ -25,18 +25,18 @@
           <% end %>
         </select>
 
-        <br><br>
+        <p/>
         <div id="batch_check">
           <input type="checkbox" name="batch_mode" value="1" id="batch_mode"/>
           <label for="batch_mode"><%= t(:batch_mode_label, "This is a full batch update") %></label>
           <br>
-          <select id="batch_mode_term_id" name="batch_mode_term_id">
-            <%= options_from_collection_for_select(@terms, :id, :name, @terms.first.try(:id)) %>
-          </select>
           <p class='instruction'>
             <%= mt(:batch_import_instructions,
             "If selected, this will delete everything for this term, which includes all courses and enrollments that are not in the selected import file above.  \nSee the documentation for details.") %>
           </p>
+          <select id="batch_mode_term_id" name="batch_mode_term_id">
+            <%= options_from_collection_for_select(@terms, :id, :name, @terms.first.try(:id)) %>
+          </select>
         </div>
 
         <div id="stickiness_options">
@@ -96,6 +96,12 @@
     <div class="last_batch" style="margin-top: 20px;">
       <h2><%= t(:last_batch_title, "Last Batch") %></h3>
       <p><%= t(:started_at_message, "Started: %{started_at}", :started_at => datetime_string(@last_batch.created_at)) %><br/>
+      <% if @last_batch.diffing_data_set_identifier %>
+        <p><%= t("Data Set Identifier: %{data_set_id}", data_set_id: @last_batch.diffing_data_set_identifier) %></p>
+        <% if @last_batch.data[:diffed_against_sis_batch_id] %>
+          <p><%= t("Incremental update successfully generated against a previous SIS Import.") %></p>
+        <% end %>
+      <% end %>
         <% if @last_batch.workflow_state == 'imported' %>
           <%= t(:imported_message, "All SIS data was successfully imported.") %>
           <%= print_counts @last_batch %>

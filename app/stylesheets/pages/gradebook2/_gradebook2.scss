@@ -1,3 +1,5 @@
+$gradebook_letter-grade-font: lighten($ic-color-dark, 8%);
+
 a#accessibility_warning {
   color: #fff;
   background-color: #DC3F3F;
@@ -27,7 +29,7 @@ $cell_height: 33px;
 .container_0,
 .container_1 {
   .slick-cell {
-    border-bottom: 1px dotted #ccc; 
+    border-bottom: 1px dotted #ccc;
     border-right: 1px dotted #ccc;
     padding: 0;
     overflow: visible;
@@ -46,7 +48,8 @@ $cell_height: 33px;
 
 .gradebook2 #content {
   position: relative;
-  padding: 0;
+  @if $use_new_styles { padding: 0 $ic-sp*2; }
+  @else { padding: 0; }
 }
 
 #gradebook-grid-wrapper {
@@ -56,6 +59,10 @@ $cell_height: 33px;
 .student-name {
   color: #1b7eda;
   text-shadow: #fbf8f8 0 0 1px;
+}
+
+.student-grades-link {
+  @if $use_high_contrast { color: darken($ic-link-color, 5%); }
 }
 
 .meta-cell .avatar {
@@ -75,7 +82,6 @@ $cell_height: 33px;
 .student-section {
   margin-top: -7px;
   font-size: 10px;
-  color: #aaaaaa;
 }
 
 .secondary_identifier_cell, .custom_column {
@@ -117,7 +123,8 @@ $cell_height: 33px;
   &.hovered-column,
   &.slick-header-column-active,
   &.ui-state-hover {
-    @include vertical-gradient(#e0ecf9, #bdd2e3);
+    @if $use_high_contrast { @include vertical-gradient(#eef5fc, #d5e2ed); }
+    @else { @include vertical-gradient(#e0ecf9, #bdd2e3); }
   }
   .slick-column-name {
     font-weight: bold;
@@ -126,32 +133,35 @@ $cell_height: 33px;
   }
   a.assignment-name {
     font-weight: normal;
-    color: #1b7ecf;
+
     text-shadow: white 0 0 1px;
-    //this is for the ellises
+    //this is for the ellipses
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    @if $use_high_contrast {
+      &:hover, &:focus { text-decoration: underline; }
+    }
+    @else { color: $ic-link-color; }
   }
   .muted {
-    background: url("/images/sound_mute.png") no-repeat center left;
-    padding-left: 16px;
+    background: url("/images/icon-sound-muted.svg") no-repeat left center;
+    background-size: 16px;
+    padding-left: 18px;
   }
   .assignment-points-possible {
     font-weight: normal;
-    text-shadow: #84848a 0 0 1px;
     font-size: 10px;
-    opacity: 0.5;
-    color: #2f2a34;
     margin: {
       left: 10px;
       right: 14px;
     };
+    // If high contrast, default to regular dark text
+    @if $use_high_contrast == false { color: lighten($ic-font-color-dark, 15%); }
   }
   .gradebook-header-drop {
     //put it above the "out of"
     z-index: 1;
-    background: url("/images/jqueryui/gradebook-header-drop.png") no-repeat top left;
     width: 14px;
     height: 14px;
     position: absolute;
@@ -161,6 +171,31 @@ $cell_height: 33px;
     opacity: 0;
     //override jqueryui blue border
     border: 0 none;
+
+    @if $use_high_contrast {
+      background: url("/images/jqueryui/gradebook-header-drop2-high-contrast.png") no-repeat top left;
+      @media (min--moz-device-pixel-ratio: 1.5),
+      (-o-min-device-pixel-ratio: 3/2),
+      (-webkit-min-device-pixel-ratio: 1.5),
+      (min-device-pixel-ratio: 1.5),
+      (min-resolution: 1.5dppx) {
+        background-image: url("/images/jqueryui/gradebook-header-drop2-high-contrast@2x.png");
+        background-size: 14px 28px;
+      }
+    }
+
+    @else {
+      background: url("/images/jqueryui/gradebook-header-drop2.png") no-repeat top left;
+      @media (min--moz-device-pixel-ratio: 1.5),
+      (-o-min-device-pixel-ratio: 3/2),
+      (-webkit-min-device-pixel-ratio: 1.5),
+      (min-device-pixel-ratio: 1.5),
+      (min-resolution: 1.5dppx) {
+        background-image: url("/images/jqueryui/gradebook-header-drop2@2x.png");
+        background-size: 14px 28px;
+      }
+    }
+
     &:hover, &.ui-menu-trigger-menu-is-open {
       background-position: bottom left;
       opacity: 1;
@@ -335,13 +370,38 @@ $cell_height: 33px;
   position: absolute;
   top: -1px;
   right: -1px;
-  background: url("/images/gradebook-comments-sprite2.png") no-repeat 100% 0;
   height: 12px;
   width: 12px;
   visibility: hidden;
   //needs to be above "normal but below tooltips"
   z-index: 2;
   overflow: hidden;
+
+  @if $use_high_contrast {
+    background: url("/images/gradebook-comments-sprite3-high-contrast.png") no-repeat 100% 0;
+    @media (min--moz-device-pixel-ratio: 1.5),
+    (-o-min-device-pixel-ratio: 3/2),
+    (-webkit-min-device-pixel-ratio: 1.5),
+    (min-device-pixel-ratio: 1.5),
+    (min-resolution: 1.5dppx) {
+      background-image: url("/images/gradebook-comments-sprite3-high-contrast@2x.png");
+      background-size: 17px 105px;
+    }
+  }
+
+  @else {
+    background: url("/images/gradebook-comments-sprite3.png") no-repeat 100% 0;
+    @media (min--moz-device-pixel-ratio: 1.5),
+    (-o-min-device-pixel-ratio: 3/2),
+    (-webkit-min-device-pixel-ratio: 1.5),
+    (min-device-pixel-ratio: 1.5),
+    (min-resolution: 1.5dppx) {
+      background-image: url("/images/gradebook-comments-sprite3@2x.png");
+      background-size: 17px 105px;
+    }
+  }
+
+
   #gradebook_grid.editable &:hover,
   #gradebook_grid.editable &:focus {
     visibility: visible;
@@ -359,6 +419,10 @@ $cell_height: 33px;
     background-position: 100% -41px;
     width: 25px;
     height: 25px;
+  }
+
+  .slick-cell.cannot_edit & {
+    display: none;
   }
 }
 
@@ -437,7 +501,8 @@ $cell_height: 33px;
     .outof {
       @include user-select(none);
       text-align: left;
-      color: #888888;
+      // if high contrast, no color value (default to regular dark text color)
+      @if $use_high_contrast == false { color: #888888; }
     }
     .grade {
       border: none;
@@ -500,21 +565,55 @@ $gradebook_checkbox_width: 16px;
 
 // STUFF FOR HEADER
 #gradebook-toolbar {
-  height: 28px;
-  padding: 6px 10px;
   position: relative;
-  border-left: none;
-  border-right: none;
+  @if $use_new_styles {
+    padding: $ic-sp;
+    border-top: none;
+    @include breakpoint(desktop) {
+      display: flex;
+      align-items: center;
+    }
+  }
+  @else {
+    height: 38px;
+    padding: 6px 10px;
+    border-left: none;
+    border-right: none;  
+  }
+}
+
+.gradebook_dropdowns {
+  display: inline-block;
 }
 
 .gradebook_filter {
-  position: absolute;
-  right: 10px;
-  top: 6px;
+  display: inline-block;
+  input {
+    width: 248px;
+    @include breakpoint(wide) { width: 300px; }
+  }
+  @if $use_new_styles {
+    @include breakpoint(desktop) {
+      margin-left: $ic-sp/3;
+    }
+  }
 }
 
-.gradebook_filter input {
-  width: 300px;
+.gradebook_menu {
+  @if $use_new_styles {
+    margin-top: $ic-sp/3;
+    @include breakpoint(desktop) {
+      white-space: nowrap;
+      margin-top: 0;
+      flex: 1;
+      text-align: right;
+    }
+  }
+  @else {
+    position: absolute;
+    right: 10px;
+    top: 6px;
+  }
 }
 
 @mixin gradebook_menu_label($fontsize) {
@@ -527,7 +626,7 @@ $gradebook_checkbox_width: 16px;
 }
 
 #section-to-show-menu {
-  width: 200px;
+  width: 350px;
   overflow-x: hidden;
   overflow-y: auto;
   max-height: 275px;
@@ -537,6 +636,10 @@ $gradebook_checkbox_width: 16px;
   .ui-state-focus:last-child {
     margin: 0 !important;
   }
+}
+
+.post-grades-placeholder {
+  display: inline-block;
 }
 
 .submission_type_icon {
@@ -578,8 +681,42 @@ $gradebook_checkbox_width: 16px;
   margin-left: -16px;
 }
 
-.gradebook_drop_down {
+.gradebook_dropdown, .export_dropdown {
   li, label {
     @include gradebook_menu_label(13px);
+    cursor:pointer;
   }
 }
+
+.post-grades-menu {
+  li.external-tools-dialog,
+  li.post-grades-placeholder {
+    cursor: pointer;
+  }
+  li.external-tools-dialog.ellip {
+    cursor: default;
+  }
+}
+
+#export_progress {
+  background-color: gray;
+  width: 100px;
+  height: 8px;
+  margin: auto;
+
+  div {
+    position: relative;
+    left: 0;
+    width: 20px;
+    height: 8px;
+    background: blue;
+  }
+}
+
+// Very specific declaration to get Choose a Section text to have better text:background contrast in Section dropdown
+#section-to-show-menu {
+  li:first-of-type.ui-state-disabled {
+    opacity: 0.8;
+  }
+}
+

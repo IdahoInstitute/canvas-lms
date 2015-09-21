@@ -18,6 +18,7 @@
 
 require 'net/pop'
 require File.expand_path('../configurable_timeout', __FILE__)
+require 'zlib'
 
 module IncomingMailProcessor
 
@@ -48,8 +49,10 @@ module IncomingMailProcessor
     rescue
     end
 
-    def each_message
+    def each_message(opts={})
       mails = @pop.mails
+      # note that stride and offset require the pop server to support the optional UIDL command
+      mails = mails.select{|mail| Zlib.crc32(with_timeout {mail.uidl}) % opts[:stride] == opts[:offset]} if opts[:stride] && opts[:offset]
       mails.each do |message|
         yield message, message.pop
       end
@@ -63,6 +66,10 @@ module IncomingMailProcessor
       # pop can't do this -- just delete the message
       delete_message(pop_message)
     end
-  end
 
+    def unprocessed_message_count
+      # not implemented, and used only for performance monitoring.
+      nil
+    end
+  end
 end

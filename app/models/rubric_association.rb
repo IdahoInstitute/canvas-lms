@@ -146,6 +146,9 @@ class RubricAssociation < ActiveRecord::Base
 
     given {|user, session| self.context.grants_right?(user, session, :participate_as_student) }
     can :submit
+
+    given {|user, session| self.context.grants_right?(user, session, :view_all_grades)}
+    can :view_rubric_assessments
   end
 
   def update_assignment_points
@@ -230,29 +233,41 @@ class RubricAssociation < ActiveRecord::Base
     raise "Artifact required for assessing" unless opts[:artifact]
     raise "Assessment type required for assessing" unless params[:assessment_type]
 
+    if opts[:artifact].is_a?(Quizzes::QuizSubmission)
+      opts[:artifact] = self.association_object.find_or_create_submission(opts[:artifact].user)
+    end
+
     if self.association_object.is_a?(Assignment) && !self.association_object.grade_group_students_individually
-      students_to_assess = self.association_object.group_students(opts[:artifact].user).last
-      artifacts_to_assess = students_to_assess.map do |student|
-        self.association_object.find_asset_for_assessment(self, student).first
+      group, students_to_assess = self.association_object.group_students(opts[:artifact].student)
+      if group
+        provisional_grader = opts[:artifact].is_a?(ModeratedGrading::ProvisionalGrade) && opts[:assessor]
+        artifacts_to_assess = students_to_assess.map do |student|
+          self.association_object.find_asset_for_assessment(self, student, :provisional_grader => provisional_grader).first
+        end
+      else
+        artifacts_to_assess = [opts[:artifact]]
       end
     else
       artifacts_to_assess = [opts[:artifact]]
     end
 
     ratings = []
-    score = 0
+    score = nil
     replace_ratings = false
+    has_score = false
     self.rubric.criteria_object.each do |criterion|
       data = params["criterion_#{criterion.id}".to_sym]
       rating = {}
       if data
         replace_ratings = true
-        rating[:points] = [criterion.points, data[:points].to_f].min || 0
+        has_score = (data[:points]).present?
+        rating[:points] = [criterion.points, data[:points].to_f].min if has_score
         rating[:criterion_id] = criterion.id
         rating[:learning_outcome_id] = criterion.learning_outcome_id
         if criterion.ignore_for_scoring
           rating[:ignore_for_scoring] = true
-        else
+        elsif has_score
+          score ||= 0
           score += rating[:points]
         end
         rating[:description] = data[:description]
@@ -292,10 +307,9 @@ class RubricAssociation < ActiveRecord::Base
         # Assessments are unique per artifact/assessor/assessment_type.
         assessment = association.rubric_assessments.where(artifact_id: artifact, artifact_type: artifact.class.to_s, assessor_id: opts[:assessor], assessment_type: params[:assessment_type]).first
       end
-      assessment ||= association.rubric_assessments.build(:assessor => opts[:assessor], :artifact => artifact, :user => artifact.user, :rubric => self.rubric, :assessment_type => params[:assessment_type])
+      assessment ||= association.rubric_assessments.build(:assessor => opts[:assessor], :artifact => artifact, :user => artifact.student, :rubric => self.rubric, :assessment_type => params[:assessment_type])
       assessment.score = score if replace_ratings
       assessment.data = ratings if replace_ratings
-      assessment.comments = params[:comments] if params[:comments]
 
       assessment.save
       assessment_to_return = assessment if assessment.artifact == opts[:artifact]

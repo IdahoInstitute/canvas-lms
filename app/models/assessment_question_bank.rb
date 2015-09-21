@@ -25,7 +25,7 @@ class AssessmentQuestionBank < ActiveRecord::Base
 
   belongs_to :context, :polymorphic => true
   validates_inclusion_of :context_type, :allow_nil => true, :in => ['Account', 'Course']
-  has_many :assessment_questions, :order => 'name, position, created_at'
+  has_many :assessment_questions, :order => 'assessment_questions.name, assessment_questions.position, assessment_questions.created_at'
   has_many :assessment_question_bank_users
   has_many :learning_outcome_alignments, :as => :content, :class_name => 'ContentTag', :conditions => ['content_tags.tag_type = ? AND content_tags.workflow_state != ?', 'learning_outcome', 'deleted'], :include => :learning_outcome
   has_many :quiz_groups, class_name: 'Quizzes::QuizGroup'
@@ -121,10 +121,13 @@ class AssessmentQuestionBank < ActiveRecord::Base
     user && self.assessment_question_bank_users.where(user_id: user).exists?
   end
 
-  def select_for_submission(count, exclude_ids=[])
+  def select_for_submission(quiz_id, count, exclude_ids=[], exclude_qq_ids=[])
     ids = self.assessment_questions.active.pluck(:id)
     ids = (ids - exclude_ids).shuffle[0...count]
-    ids.empty? ? [] : AssessmentQuestion.where(id: ids).shuffle
+    questions = ids.empty? ? [] : AssessmentQuestion.where(id: ids).shuffle
+    questions.map do |aq|
+      aq.find_or_create_quiz_question(quiz_id, exclude_qq_ids)
+    end
   end
 
   alias_method :destroy!, :destroy

@@ -1,20 +1,11 @@
 if ENV['COVERAGE'] == "1"
   puts "Code Coverage enabled"
-  require 'simplecov'
-  require 'simplecov-rcov'
-
-  SimpleCov.use_merging
-  SimpleCov.merge_timeout(10000)
-
-  SimpleCov.command_name "RSpec:#{Process.pid}#{ENV['TEST_ENV_NUMBER']}"
-  SimpleCov.start do
-    SimpleCov.at_exit {
-      SimpleCov.result
-      #SimpleCov.result.format! to get a coverage report without vendored_gems
-    }
+  begin
+    require 'spec/coverage_tool'
+    CoverageTool.start("RSpec:#{Process.pid}#{ENV['TEST_ENV_NUMBER']}")
+  rescue LoadError => e
+    puts "Error: #{e}"
   end
-else
-  puts "Code coverage not enabled"
 end
 
 environment_configuration(defined?(config) && config) do |config|
@@ -63,9 +54,6 @@ environment_configuration(defined?(config) && config) do |config|
   #hairtrigger parallelized runtime race conditions
   config.active_record.schema_format = :sql
 
-  # eval <env>-local.rb if it exists
-  Dir[File.dirname(__FILE__) + "/" + File.basename(__FILE__, ".rb") + "-*.rb"].each { |localfile| eval(File.new(localfile).read, nil, localfile, 1) }
-
   config.cache_store = :null_store
 
   # Raise exceptions instead of rendering exception templates
@@ -77,4 +65,7 @@ environment_configuration(defined?(config) && config) do |config|
   unless CANVAS_RAILS3
     config.eager_load = false
   end
+
+  # eval <env>-local.rb if it exists
+  Dir[File.dirname(__FILE__) + "/" + File.basename(__FILE__, ".rb") + "-*.rb"].each { |localfile| eval(File.new(localfile).read, nil, localfile, 1) }
 end

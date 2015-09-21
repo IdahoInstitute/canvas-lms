@@ -37,7 +37,7 @@ require [
 ], (I18n, {Model}, CreateUserList, Role, CreateUsersView, RoleSelectView, rosterUsersTemplate, RosterUserCollection, RolesCollection, SectionCollection, GroupCategoryCollection, InputFilterView, PaginatedCollectionView, RosterUserView, RosterView, RosterTabsView, ResendInvitationsView, $) ->
 
   fetchOptions =
-    include: ['avatar_url', 'enrollments', 'email', 'observed_users']
+    include: ['avatar_url', 'enrollments', 'email', 'observed_users', 'can_be_removed']
     per_page: 50
   users = new RosterUserCollection null,
     course_id: ENV.context_asset_string.split('_')[1]
@@ -71,7 +71,7 @@ require [
     model: course
     resendInvitationsUrl: ENV.resend_invitations_url
     canResend: ENV.permissions.manage_students or ENV.permissions.manage_admin_users
-  groupCategories = new (GroupCategoryCollection.extend({url: "/api/v1/courses/#{ENV.course?.id}/group_categories"}))
+  groupCategories = new (GroupCategoryCollection.extend({url: "/api/v1/courses/#{ENV.course?.id}/group_categories?per_page=50"}))
 
   rosterTabsView = new RosterTabsView
     collection: groupCategories

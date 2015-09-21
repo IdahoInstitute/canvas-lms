@@ -61,9 +61,13 @@ class ConversationParticipant < ActiveRecord::Base
     # we're also counting on conversations being in the join
 
     own_root_account_ids = Shard.birth.activate do
-      user.associated_root_accounts.select{ |a| a.grants_right?(user, :become_user) }.map(&:id)
+      accts = user.associated_root_accounts.select{ |a| a.grants_right?(user, :become_user) }
+      # we really shouldn't need the global id here, but we've got a lot of participants with
+      # global id's in their root_account_ids for some reason
+      accts.map(&:id) + accts.map(&:global_id)
     end
-    id_string = "[" + own_root_account_ids.sort.join("][") + "]"
+    own_root_account_ids.sort!.uniq!
+    id_string = "[" + own_root_account_ids.join("][") + "]"
     root_account_id_matcher = "'%[' || REPLACE(conversation_participants.root_account_ids, ',', ']%[') || ']%'"
     where("conversation_participants.root_account_ids <> '' AND " + like_condition('?', root_account_id_matcher, false), id_string)
   }
@@ -125,7 +129,7 @@ class ConversationParticipant < ActiveRecord::Base
         [<<-SQL, user_ids]
         EXISTS (
           SELECT *
-          FROM conversation_participants cp
+          FROM #{ConversationParticipant.quoted_table_name} cp
           WHERE cp.conversation_id = conversation_participants.conversation_id
           AND user_id IN (?)
         )
@@ -134,7 +138,7 @@ class ConversationParticipant < ActiveRecord::Base
         [<<-SQL, user_ids, user_ids.size]
         (
           SELECT COUNT(*)
-          FROM conversation_participants cp
+          FROM #{ConversationParticipant.quoted_table_name} cp
           WHERE cp.conversation_id = conversation_participants.conversation_id
           AND user_id IN (?)
         ) = ?
@@ -146,7 +150,7 @@ class ConversationParticipant < ActiveRecord::Base
       if Shard.current == scope_shard
         [sanitize_sql(shard_conditions)]
       else
-        with_exclusive_scope do
+        ConversationParticipant.unscoped do
           conversation_ids = ConversationParticipant.where(shard_conditions).select(:conversation_id).map do |c|
             Shard.relative_id_for(c.conversation_id, Shard.current, scope_shard)
           end
@@ -245,18 +249,24 @@ class ConversationParticipant < ActiveRecord::Base
     }.merge(options)
 
     shard.activate do
-      Rails.cache.fetch([conversation, user, 'participants', options].cache_key) do
-        participants = conversation.participants
-        if options[:include_indirect_participants]
-          user_ids = messages.map(&:all_forwarded_messages).flatten.map(&:author_id)
-          user_ids -= participants.map(&:id)
-          participants += Shackles.activate(:slave) { MessageableUser.available.where(:id => user_ids).all }
-        end
-        if options[:include_participant_contexts]
-          # we do this to find out the contexts they share with the user
-          user.load_messageable_users(participants, :strict_checks => false)
-        else
-          participants
+      if !options[:include_indirect_participants] && !options[:include_participant_contexts]
+        # this is cached in the conversation model
+        conversation.participants
+      else
+        # use a user specific cache record for the modified participant list
+        Rails.cache.fetch([conversation, user, 'participants', options].cache_key) do
+          participants = conversation.participants
+          if options[:include_indirect_participants]
+            user_ids = messages.map(&:all_forwarded_messages).flatten.map(&:author_id)
+            user_ids -= participants.map(&:id)
+            participants += Shackles.activate(:slave) { MessageableUser.available.where(:id => user_ids).to_a }
+          end
+          if options[:include_participant_contexts]
+            # we do this to find out the contexts they share with the user
+            user.load_messageable_users(participants, :strict_checks => false)
+          else
+            participants
+          end
         end
       end
     end
@@ -280,6 +290,29 @@ class ConversationParticipant < ActiveRecord::Base
 
   def add_message(body_or_obj, options={})
     conversation.add_message(user, body_or_obj, options.merge(:generated => false))
+  end
+
+  def process_new_message(message_args, recipients, included_message_ids, tags)
+    if recipients && !self.private?
+      self.add_participants recipients, no_messages: true
+    end
+    self.reload
+
+    if included_message_ids
+      ConversationMessage.where(:id => included_message_ids).each do |msg|
+        self.conversation.add_message_to_participants(msg, new_message: false, only_users: recipients, reset_unread_counts: false)
+      end
+    end
+
+    message = Conversation.build_message(*message_args)
+    self.add_message(message, :tags => tags, :update_for_sender => false, :only_users => recipients)
+
+    message
+  end
+
+  # if this is false, should queue a job to add the message, don't wait
+  def should_process_immediately?
+    conversation.conversation_participants.count < Setting.get('max_immediate_conversation_participants', 100).to_i
   end
 
   # Public: soft deletes the message participants for this conversation
@@ -464,7 +497,7 @@ class ConversationParticipant < ActiveRecord::Base
 
   def move_to_user(new_user)
     conversation.shard.activate do
-      self.class.send :with_exclusive_scope do
+      self.class.unscoped do
         old_shard = self.user.shard
         conversation.conversation_messages.where(:author_id => user_id).update_all(:author_id => new_user)
         if existing = conversation.conversation_participants.where(user_id: new_user).first
@@ -485,7 +518,7 @@ class ConversationParticipant < ActiveRecord::Base
         end
       end
     end
-    self.class.send :with_exclusive_scope do
+    self.class.unscoped do
       conversation.regenerate_private_hash! if private?
     end
   end

@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2011 Instructure, Inc.
+# Copyright (C) 2011 - 2014 Instructure, Inc.
 #
 # This file is part of Canvas.
 #
@@ -24,7 +24,6 @@ class AssetUserAccess < ActiveRecord::Base
   validates_inclusion_of :context_type, :allow_nil => true, :in => ['User', 'Group', 'Course']
   belongs_to :user
   has_many :page_views
-  has_many :asset_access_ranges
   before_save :infer_defaults
   attr_accessible :user, :asset_code
 
@@ -58,7 +57,7 @@ class AssetUserAccess < ActiveRecord::Base
     res[:totals] = {}
     res[:prior_totals] = {}
     Rails.cache.fetch(['access_by_category', list.first, list.last, list.length].cache_key) do
-      list.each{|a| 
+      list.each{|a|
         a.category ||= 'unknown'
         cat = res[:categories][a.category] || {}
         cat[:view_tally] ||= 0
@@ -83,7 +82,7 @@ class AssetUserAccess < ActiveRecord::Base
         res[:totals][:participate_tally] ||= 0
         res[:totals][:participate_tally] += a.participate_score || 0
       }
-      (old_list || []).each{|a| 
+      (old_list || []).each{|a|
         a.category ||= 'unknown'
         cat = res[:categories][a.category] || {}
         cat[:prior_view_tally] ||= 0
@@ -103,7 +102,7 @@ class AssetUserAccess < ActiveRecord::Base
         res[:prior_totals][:participate_tally] ||= 0
         res[:prior_totals][:participate_tally] += a.participate_score || 0
       }
-      res[:categories].each{|key, val| 
+      res[:categories].each{|key, val|
         res[:categories][key][:participate_average] = (res[:categories][key][:participate_tally].to_f / res[:totals][:participate_tally].to_f * 100).round / 100.0 rescue 0
         res[:categories][key][:view_average] = (res[:categories][key][:view_tally].to_f / res[:totals][:view_tally].to_f * 100).round rescue 0
         res[:categories][key][:interaction_seconds_average] = (res[:categories][key][:interaction_seconds].to_f / res[:categories][key][:view_tally].to_f * 100).round / 100.0 rescue 0
@@ -124,10 +123,13 @@ class AssetUserAccess < ActiveRecord::Base
   end
 
   def asset_display_name
+    return nil unless asset
     if self.asset.respond_to?(:title) && !self.asset.title.nil?
       asset.title
     elsif self.asset.is_a? Enrollment
       asset.user.name
+    elsif self.asset.respond_to?(:name) && !self.asset.name.nil?
+      asset.name
     else
       self.asset_code
     end
@@ -142,7 +144,8 @@ class AssetUserAccess < ActiveRecord::Base
       split = self.asset_code.split(/\:/)
       if split[1] == self.context_code
         # TODO: i18n
-        "#{self.context_type} #{split[0].titleize}"
+        title = split[0] == "topics" ? "Discussions" : split[0].titleize
+        "#{self.context_type} #{title}"
       else
         self.display_name
       end
@@ -153,13 +156,17 @@ class AssetUserAccess < ActiveRecord::Base
   end
 
   def asset
+    return nil unless asset_code
     asset_code, general = self.asset_code.split(":").reverse
     asset = Context.find_asset_by_asset_string(asset_code, context)
+    asset ||= (match = asset_code.match(/enrollment_(\d+)/)) && Enrollment.where(:id => match[1]).first
     asset
   end
 
   def asset_class_name
-    self.asset.class.name.underscore if self.asset
+    name = self.asset.class.name.underscore if self.asset
+    name = "Quiz" if name == "Quizzes::Quiz"
+    name
   end
 
   def log( kontext, accessed )
@@ -169,6 +176,7 @@ class AssetUserAccess < ActiveRecord::Base
     self.context = kontext
     self.summarized_at = nil
     self.last_access = Time.now.utc
+    self.display_name = self.asset_display_name
     log_action(accessed[:level])
     save
   end

@@ -4,8 +4,11 @@ define [
 ], (Folder, splitAssetString) ->
 
   fileContexts = ENV.FILES_CONTEXTS or []
+  newFolderTree = ENV.NEW_FOLDER_TREE
+  newFolderTree = false if newFolderTree == undefined
 
   filesEnv =
+    newFolderTree: newFolderTree
     contexts: fileContexts
 
     contextsDictionary: fileContexts.reduce (dict, context)  ->
@@ -22,24 +25,30 @@ define [
     contextId: fileContexts[0]?.contextId
 
     rootFolders: fileContexts.map (contextData) ->
-      folder = new Folder({
-        'custom_name': contextData.name
-        'context_type': contextData.contextType.replace(/s$/, '') #singularize it
-        'context_id': contextData.contextId
-        'id': contextData.root_folder_id
-      })
-      folder.url = "/api/v1/#{contextData.contextType}/#{contextData.contextId}/folders/root"
-      folder
+      if ENV.current_user_id
+        folder = new Folder({
+          'custom_name': contextData.name
+          'context_type': contextData.contextType.replace(/s$/, '') #singularize it
+          'context_id': contextData.contextId
+        })
+        folder.url = "/api/v1/#{contextData.contextType}/#{contextData.contextId}/folders/root"
+        folder.fetch()
+        folder
+
+  filesEnv.contextFor = (folderOrFile) ->
+    if folderOrFile.collection?.parentFolder
+      folderOrFile = folderOrFile.collection.parentFolder
+    if folderOrFile instanceof Folder
+      folder =  folderOrFile
+      assetString = (folder?.get('context_type') + 's_' + folder?.get('context_id')).toLowerCase()
+    else if folderOrFile.contextType and folderOrFile.contextId
+      assetString = "#{folderOrFile.contextType}_#{folderOrFile.contextId}".toLowerCase()
+    filesEnv.contextsDictionary?[assetString]
 
   filesEnv.userHasPermission = (folderOrFile, action) ->
     return false unless folderOrFile
-    folder = if folderOrFile instanceof Folder
-      folderOrFile
-    else
-      folderOrFile.collection?.parentFolder
 
-    assetString = (folder?.get('context_type') + 's_' + folder?.get('context_id')).toLowerCase()
-    filesEnv.contextsDictionary?[assetString]?.permissions?[action]
+    filesEnv.contextFor(folderOrFile)?.permissions?[action]
 
   filesEnv.baseUrl =  if filesEnv.showingAllContexts
                         '/files'

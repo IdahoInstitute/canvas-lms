@@ -15,7 +15,9 @@
 # You should have received a copy of the GNU Affero General Public License along
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
+
 require 'iconv'
+require 'mail'
 
 module IncomingMailProcessor
 
@@ -46,6 +48,15 @@ module IncomingMailProcessor
       configure_accounts(config.slice(*mailbox_keys))
     end
 
+    def self.workers
+      settings.workers || 1
+    end
+
+    # True if we should launch N workers per mailbox, false to just launch N workers overall
+    def self.dedicated_workers_per_mailbox
+      settings.dedicated_workers_per_mailbox.nil? ? false : settings.dedicated_workers_per_mailbox
+    end
+
     def self.run_periodically?
       if settings.run_periodically.nil?
         # check backwards compatibility settings
@@ -55,10 +66,19 @@ module IncomingMailProcessor
       end
     end
 
-    def process
-      self.class.mailbox_accounts.each do |account|
+    def process(opts={})
+      if opts[:mailbox_account_address]
+        # Find the one with that address, or do nothing if none exists (probably means we're in the middle of a deploy)
+        accounts_to_process = self.class.mailbox_accounts.select { |a| a.address == opts[:mailbox_account_address] }
+      else
+        accounts_to_process = self.class.mailbox_accounts
+      end
+
+      accounts_to_process.each do |account|
         mailbox = self.class.create_mailbox(account)
-        process_mailbox(mailbox, account)
+        mailbox_opts = {}
+        mailbox_opts = {offset: opts[:worker_id], stride: self.class.workers} if opts[:worker_id] && self.class.workers > 1
+        process_mailbox(mailbox, account, mailbox_opts)
       end
     end
 
@@ -67,7 +87,11 @@ module IncomingMailProcessor
 
       body, html_body = extract_body(incoming_message)
 
-      @message_handler.handle(mailbox_account.address, body, html_body, incoming_message, tag)
+      handle = @message_handler.handle(mailbox_account.address, body, html_body, incoming_message, tag)
+
+      report_stats(incoming_message, mailbox_account)
+
+      handle
     end
 
     private
@@ -79,16 +103,42 @@ module IncomingMailProcessor
         text_part =  incoming_message.text_part
 
         html_body = self.class.utf8ify(html_part.body.decoded, html_part.charset) if html_part
-        body = self.class.utf8ify(text_part.body.decoded, text_part.charset)
+        text_body = self.class.utf8ify(text_part.body.decoded, text_part.charset) if text_part
       else
-        body = self.class.utf8ify(incoming_message.body.decoded, incoming_message.charset)
+        case incoming_message.mime_type
+        when 'text/plain'
+          text_body = self.class.utf8ify(incoming_message.body.decoded, incoming_message.charset)
+        when 'text/html'
+          html_body = self.class.utf8ify(incoming_message.body.decoded, incoming_message.charset)
+        else
+          raise "Unrecognized Content-Type: #{incoming_message.mime_type.inspect}"
+        end
       end
 
-      if !html_body
-        html_body = self.class.format_message(body).first
+      if html_body && !text_body
+        text_body = self.class.html_to_text(html_body)
       end
 
-      return body, html_body
+      if text_body && !html_body
+        html_body = self.class.format_message(text_body).first
+      end
+
+      return text_body, html_body
+    end
+
+    def report_stats(incoming_message, mailbox_account)
+      CanvasStatsd::Statsd.increment("incoming_mail_processor.incoming_message_processed.#{mailbox_account.escaped_address}")
+
+      age = age(incoming_message)
+      if age
+        stat_name = "incoming_mail_processor.message_age.#{mailbox_account.escaped_address}"
+        CanvasStatsd::Statsd.timing(stat_name, age)
+      end
+    end
+
+    def age(message)
+      datetime = message.date
+      (Time.now - datetime).to_i * 1000 if datetime # age in ms, please
     end
 
     def self.mailbox_keys
@@ -132,7 +182,7 @@ module IncomingMailProcessor
       flat_account_configs = flatten_account_configs(account_configs)
       self.mailbox_accounts = flat_account_configs.map do |mailbox_protocol, mailbox_config|
         error_folder = mailbox_config.delete(:error_folder)
-        address = mailbox_config[:username]
+        address = mailbox_config[:address] || mailbox_config[:username]
         IncomingMailProcessor::MailboxAccount.new({
           :protocol => mailbox_protocol.to_sym,
           :config => mailbox_config,
@@ -196,10 +246,10 @@ module IncomingMailProcessor
     end
 
 
-    def process_mailbox(mailbox, account)
+    def process_mailbox(mailbox, account, opts={})
       error_folder = account.error_folder
       mailbox.connect
-      mailbox.each_message do |message_id, raw_contents|
+      mailbox.each_message(opts) do |message_id, raw_contents|
         message, errors = parse_message(raw_contents)
         if message && !errors.present?
           process_message(message, account)

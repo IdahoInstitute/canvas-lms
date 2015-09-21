@@ -17,27 +17,6 @@
 #
 
 module DashboardHelper
-  def accessible_message_icon_text(icon)
-    case icon
-    when "warning"
-      I18n.t('#global_message_icons.warning', "warning")
-    when "error"
-      I18n.t('#global_message_icons.error', "error")
-    when "information"
-      I18n.t('#global_message_icons.information', "information")
-    when "question"
-      I18n.t('#global_message_icons.question', "question")
-    when "calendar"
-      I18n.t('#global_message_icons.calendar', "calendar")
-    when "announcement"
-      I18n.t('#global_message_icons.announcement', "announcement")
-    when "invitation"
-      I18n.t('#global_message_icons.invitation', "invitation")
-    else
-      raise "Unknown dashboard message icon type"
-    end
-  end
-
   def show_welcome_message?
     @current_user.present? &&
       @current_user.cached_current_enrollments(:include_enrollment_uuid => session[:enrollment_uuid], :preload_courses => true).select(&:active?).empty?
@@ -73,7 +52,7 @@ module DashboardHelper
 
     contexts.map do |name, url|
       url = nil if category == 'Conversation'
-      url.present? ? "<a href=\"#{url}\" aria-label=\"#{accessibility_category_label(category)}\">#{h(name)}</a>" : h(name)
+      url.present? ? "<a href=\"#{url}\" aria-label=\"#{accessibility_category_label(category)} for #{h(name)}\">#{h(name)}</a>" : h(name)
     end.to_sentence.html_safe
   end
 
@@ -136,6 +115,21 @@ module DashboardHelper
     else
       raise "Unknown activity category"
     end
+  end
+
+  def todo_ignore_api_url(activity_type, item, force_permanent = false)
+    activity_symbol = activity_type.to_sym
+
+    permanent = (activity_symbol != :grading || force_permanent) ? 1 : nil
+
+    api_v1_users_todo_ignore_url(item.asset_string, activity_type, { permanent: permanent })
+  end
+
+  def todo_link_classes(activity_type)
+    activity_symbol = activity_type.to_sym
+
+    (activity_symbol == :grading) ? 'al-trigger disable_item_link' : 'disable_item_link disable-todo-item-link'
+
   end
 
 end

@@ -46,6 +46,10 @@ h1, h2, h3, h4, h5, h6, .h1, .h2, .h3, .h4, .h5, .h6 {
 }
 h1, h2, .h1, .h2 {
   font-size: 1.8em;
+  @if $use_new_styles {
+    font-weight: 300;
+    line-height: 1.1;
+  }
 }
 h3, .h3 {
   font-size: 1.5em;
@@ -205,26 +209,7 @@ blockquote p {
 /*
 @styleguide Popovers
 
-Don't do this, we need a more accessible way to handle these cases.
-The screenreaders will read all the html entities and that's just rude.
-
-```html
-<a
-  data-tooltip='{"tooltipClass":"popover right", "position":"right"}'
-  title="<div class='popover-title'>Title of Popover</div><div class='popover-content'><p>Lo-fi next level kale chips narwhal tattooed, tonx YOLO mixtape.</p></div>">
-  Text with popover
-</a>
-<p>
-  <button
-    data-tooltip='{"tooltipClass":"popover top", "position":"top"}'
-    title="<div class='popover-title'>Title of Popover</div><div class='popover-content'><p>Lo-fi next level kale chips narwhal tattooed, tonx YOLO mixtape.</p></div>"
-    class="btn">
-    button with popover
-  </button>
-</p>
-```
-
-### Accessible body-only popovers
+## Accessible *body-only* popovers
 
 Here's an accessible way to do it for popovers without a header.
 `.popover-padded` takes care of what `.popover-content` did above.

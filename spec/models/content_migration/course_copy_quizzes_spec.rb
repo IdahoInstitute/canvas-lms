@@ -4,12 +4,15 @@ describe ContentMigration do
   context "course copy quizzes" do
     include_examples "course copy"
 
+    before :each do
+      skip unless Qti.qti_enabled?
+    end
+
     it "should copy a quiz when assignment is selected" do
-      pending unless Qti.qti_enabled?
       @quiz = @copy_from.quizzes.create!
       @quiz.did_edit
       @quiz.offer!
-      @quiz.assignment.should_not be_nil
+      expect(@quiz.assignment).not_to be_nil
 
       @cm.copy_options = {
         :assignments => {mig_id(@quiz.assignment) => "1"},
@@ -19,11 +22,10 @@ describe ContentMigration do
 
       run_course_copy
 
-      @copy_to.quizzes.find_by_migration_id(mig_id(@quiz)).should_not be_nil
+      expect(@copy_to.quizzes.where(migration_id: mig_id(@quiz)).first).not_to be_nil
     end
 
     it "should create a new assignment and module item if copying a new quiz (even if the assignment migration_id matches)" do
-      pending unless Qti.qti_enabled?
       quiz = @copy_from.quizzes.create!(:title => "new quiz")
       quiz2 = @copy_to.quizzes.create!(:title => "already existing quiz")
 
@@ -41,13 +43,12 @@ describe ContentMigration do
 
       run_course_copy
 
-      @copy_to.quizzes.map(&:title).sort.should == ["already existing quiz", "new quiz"]
-      @copy_to.assignments.map(&:title).sort.should == ["already existing quiz", "new quiz"]
-      @copy_to.context_module_tags.map(&:title).should == ["new quiz"]
+      expect(@copy_to.quizzes.map(&:title).sort).to eq ["already existing quiz", "new quiz"]
+      expect(@copy_to.assignments.map(&:title).sort).to eq ["already existing quiz", "new quiz"]
+      expect(@copy_to.context_module_tags.map(&:title)).to eq ["new quiz"]
     end
 
     it "should not duplicate quizzes and associated items if overwrite_quizzes is true" do
-      pending unless Qti.qti_enabled?
       # overwrite_quizzes should now default to true for course copy and canvas import
 
       quiz = @copy_from.quizzes.create!(:title => "published quiz")
@@ -62,12 +63,12 @@ describe ContentMigration do
 
       run_course_copy
 
-      @copy_to.quizzes.map(&:title).sort.should == ["published quiz", "unpublished quiz"]
-      @copy_to.assignments.map(&:title).sort.should == ["published quiz"]
-      @copy_to.context_module_tags.map(&:title).sort.should == ["published quiz", "unpublished quiz"]
+      expect(@copy_to.quizzes.map(&:title).sort).to eq ["published quiz", "unpublished quiz"]
+      expect(@copy_to.assignments.map(&:title).sort).to eq ["published quiz", "unpublished quiz"]
+      expect(@copy_to.context_module_tags.map(&:title).sort).to eq ["published quiz", "unpublished quiz"]
 
-      @copy_to.quizzes.find_by_title("published quiz").should_not be_unpublished
-      @copy_to.quizzes.find_by_title("unpublished quiz").should be_unpublished
+      expect(@copy_to.quizzes.where(title: "published quiz").first).not_to be_unpublished
+      expect(@copy_to.quizzes.where(title: "unpublished quiz").first).to be_unpublished
 
       quiz.title = "edited published quiz"
       quiz.save!
@@ -88,16 +89,17 @@ describe ContentMigration do
 
       run_course_copy
 
-      @copy_to.quizzes.map(&:title).sort.should == ["edited published quiz", "edited unpublished quiz"]
-      @copy_to.assignments.map(&:title).sort.should == ["edited published quiz"]
-      @copy_to.context_module_tags.map(&:title).sort.should == ["edited published quiz", "edited unpublished quiz"]
+      expect(@copy_to.quizzes.map(&:title).sort).to eq ["edited published quiz", "edited unpublished quiz"]
+      expect(@copy_to.assignments.map(&:title).sort).to eq ["edited published quiz", "edited unpublished quiz"]
+      expect(@copy_to.context_module_tags.map(&:title).sort).to eq ["edited published quiz", "edited unpublished quiz"]
 
-      @copy_to.quizzes.find_by_title("edited published quiz").should_not be_unpublished
-      @copy_to.quizzes.find_by_title("edited unpublished quiz").should be_unpublished
+      expect(@copy_to.context_module_tags.map(&:workflow_state).sort).to eq ["active", "unpublished"]
+
+      expect(@copy_to.quizzes.where(title: "edited published quiz").first).not_to be_unpublished
+      expect(@copy_to.quizzes.where(title: "edited unpublished quiz").first).to be_unpublished
     end
 
     it "should duplicate quizzes and associated items if overwrite_quizzes is false" do
-      pending unless Qti.qti_enabled?
       quiz = @copy_from.quizzes.create!(:title => "published quiz")
       quiz2 = @copy_from.quizzes.create!(:title => "unpublished quiz")
       quiz.did_edit
@@ -125,13 +127,12 @@ describe ContentMigration do
 
       run_course_copy
 
-      @copy_to.quizzes.map(&:title).sort.should == ["published quiz", "published quiz", "unpublished quiz", "unpublished quiz"]
-      @copy_to.assignments.map(&:title).sort.should == ["published quiz", "published quiz"]
-      @copy_to.context_module_tags.map(&:title).sort.should == ["published quiz", "published quiz", "unpublished quiz", "unpublished quiz"]
+      expect(@copy_to.quizzes.map(&:title).sort).to eq ["published quiz", "published quiz", "unpublished quiz", "unpublished quiz"]
+      expect(@copy_to.assignments.map(&:title).sort).to eq ["published quiz", "published quiz", "unpublished quiz", "unpublished quiz"]
+      expect(@copy_to.context_module_tags.map(&:title).sort).to eq ["published quiz", "published quiz", "unpublished quiz", "unpublished quiz"]
     end
 
     it "should have correct question count on copied surveys and practive quizzes" do
-      pending unless Qti.qti_enabled?
       sp = @copy_from.quizzes.create!(:title => "survey pub", :quiz_type => "survey")
       data = {
                           :question_type => "multiple_choice_question",
@@ -142,25 +143,22 @@ describe ContentMigration do
                           :answers =>
                                   [{:migration_id => "QUE_1016_A1", :text => "<br />", :weight => 100, :id => 8080},
                                    {:migration_id => "QUE_1017_A2", :text => "<pre>", :weight => 0, :id => 2279}]}.with_indifferent_access
-      qq = sp.quiz_questions.create!
-      qq.write_attribute(:question_data, data)
-      qq.save!
+      qq = sp.quiz_questions.create!(:question_data => data)
       sp.generate_quiz_data
       sp.published_at = Time.now
       sp.workflow_state = 'available'
       sp.save!
 
-      sp.question_count.should == 1
+      expect(sp.question_count).to eq 1
 
       run_course_copy
 
-      q = @copy_to.quizzes.find_by_migration_id(mig_id(sp))
-      q.should_not be_nil
-      q.question_count.should == 1
+      q = @copy_to.quizzes.where(migration_id: mig_id(sp)).first
+      expect(q).not_to be_nil
+      expect(q.question_count).to eq 1
     end
 
     it "should not mix up quiz questions and assessment questions with the same ids" do
-      pending unless Qti.qti_enabled?
       quiz1 = @copy_from.quizzes.create!(:title => "quiz 1")
       quiz2 = @copy_from.quizzes.create!(:title => "quiz 1")
 
@@ -170,16 +168,13 @@ describe ContentMigration do
 
       run_course_copy
 
-      newquiz2 = @copy_to.quizzes.find_by_migration_id(mig_id(quiz2))
-      newquiz2.quiz_questions.first.question_data['question_name'].should == 'test question 2'
+      newquiz2 = @copy_to.quizzes.where(migration_id: mig_id(quiz2)).first
+      expect(newquiz2.quiz_questions.first.question_data['question_name']).to eq 'test question 2'
     end
 
     it "should generate numeric ids for answers" do
-      pending unless Qti.qti_enabled?
-
       q = @copy_from.quizzes.create!(:title => "test quiz")
-      mc = q.quiz_questions.create!
-      mc.write_attribute(:question_data, {
+      mc = q.quiz_questions.create!(:question_data => {
           points_possible: 1,
           question_type: "multiple_choice_question",
           question_name: "mc",
@@ -188,9 +183,7 @@ describe ContentMigration do
           answers: [{ text: 'blue', weight: 0, id: 123 },
                     { text: 'yellow', weight: 100, id: 456 }]
       }.with_indifferent_access)
-      mc.save!
-      tf = q.quiz_questions.create!
-      tf.write_attribute(:question_data, {
+      tf = q.quiz_questions.create!(:question_data => {
           points_possible: 1,
           question_type: "true_false_question",
           question_name: "tf",
@@ -199,56 +192,114 @@ describe ContentMigration do
           answers: [{ text: "True", weight: 100, id: 9608 },
                     { text: "False", weight: 0, id: 9093 }]
       }.with_indifferent_access)
-      tf.save!
       q.generate_quiz_data
       q.workflow_state = 'available'
       q.save!
 
       run_course_copy
 
-      q2 = @copy_to.quizzes.find_by_migration_id(mig_id(q))
-      q2.quiz_data.size.should eql(2)
+      q2 = @copy_to.quizzes.where(migration_id: mig_id(q)).first
+      expect(q2.quiz_data.size).to eql(2)
       ans_count = 0
       q2.quiz_data.each do |qd|
         qd["answers"].each do |ans|
-          ans["id"].should be_a(Integer)
+          expect(ans["id"]).to be_a(Integer)
           ans_count += 1
         end
       end
-      ans_count.should eql(4)
+      expect(ans_count).to eql(4)
+    end
+
+    it "should make true-false question answers consistent" do
+      q = @copy_from.quizzes.create!(:title => "test quiz")
+      tf = q.quiz_questions.create!(:question_data => {
+           points_possible: 1,
+           question_type: "true_false_question",
+           question_name: "tf",
+           name: "tf",
+           question_text: "this statement is false.",
+           answers: [{ text: "false", weight: 0, id: 9093 },
+                     { text: "true", weight: 100, id: 9608 }]
+       }.with_indifferent_access)
+      q.generate_quiz_data
+      q.workflow_state = 'available'
+      q.save!
+
+      run_course_copy
+
+      q2 = @copy_to.quizzes.where(migration_id: mig_id(q)).first
+      expect(q2.quiz_data.first["answers"].map { |a| a["text"] }).to eq ["True", "False"]
+      expect(q2.quiz_data.first["answers"].map { |a| a["weight"] }).to eq [100, 0]
+    end
+
+    it "should import invalid true-false questions as multiple choice" do
+      q = @copy_from.quizzes.create!(:title => "test quiz")
+      tf_bad = q.quiz_questions.create!(:question_data => {
+          points_possible: 1,
+          question_type: "true_false_question",
+          question_name: "tf",
+          name: "tf",
+          question_text: "this statement is false.",
+          answers: [{ text: "foo", weight: 0, id: 9093 },
+                    { text: "tr00", weight: 100, id: 9608 }]
+      }.with_indifferent_access)
+      q.generate_quiz_data
+      q.workflow_state = 'available'
+      q.save!
+
+      run_course_copy
+
+      q2 = @copy_to.quizzes.where(migration_id: mig_id(q)).first
+      expect(q2.quiz_data.first["question_type"]).to eq "multiple_choice_question"
+      expect(q2.quiz_data.first["answers"].map { |a| a["text"] }).to eq ["foo", "tr00"]
+    end
+
+    it "should escape html characters in text answers" do
+      q = @copy_from.quizzes.create!(:title => "test quiz")
+      fimb = q.quiz_questions.create!(:question_data => {
+         points_possible: 1,
+         question_type: "fill_in_multiple_blanks_question",
+         question_name: "tf",
+         name: "tf",
+         question_text: "this statement is false. [orisit]",
+         answers: [{ text: "<p>foo</p>", weight: 100, id: 9093, blank_id: "orisit" },
+                   { text: "<div/>tr00", weight: 100, id: 9608, blank_id: "orisit" }]
+      }.with_indifferent_access)
+      q.generate_quiz_data
+      q.workflow_state = 'available'
+      q.save!
+
+      run_course_copy
+
+      q2 = @copy_to.quizzes.where(migration_id: mig_id(q)).first
+      expect(q2.quiz_data.first["answers"].map { |a| a["text"] }).to eq ["<p>foo</p>", "<div/>tr00"]
     end
 
     it "should copy quizzes as published if they were published before" do
-      pending unless Qti.qti_enabled?
       g = @copy_from.assignment_groups.create!(:name => "new group")
       asmnt_unpub = @copy_from.quizzes.create!(:title => "asmnt unpub", :quiz_type => "assignment", :assignment_group_id => g.id)
       asmnt_pub = @copy_from.quizzes.create(:title => "asmnt", :quiz_type => "assignment", :assignment_group_id => g.id)
-      asmnt_pub.workflow_state = 'available'
-      asmnt_pub.save!
+      asmnt_pub.publish!
       graded_survey_unpub = @copy_from.quizzes.create!(:title => "graded survey unpub", :quiz_type => "graded_survey", :assignment_group_id => g.id)
       graded_survey_pub = @copy_from.quizzes.create(:title => "grade survey pub", :quiz_type => "graded_survey", :assignment_group_id => g.id)
-      graded_survey_pub.workflow_state = 'available'
-      graded_survey_pub.save!
+      graded_survey_pub.publish!
       survey_unpub = @copy_from.quizzes.create!(:title => "survey unpub", :quiz_type => "survey")
       survey_pub = @copy_from.quizzes.create(:title => "survey pub", :quiz_type => "survey")
-      survey_pub.workflow_state = 'available'
-      survey_pub.save!
+      survey_pub.publish!
       practice_unpub = @copy_from.quizzes.create!(:title => "practice unpub", :quiz_type => "practice_quiz")
       practice_pub = @copy_from.quizzes.create(:title => "practice pub", :quiz_type => "practice_quiz")
-      practice_pub.workflow_state = 'available'
-      practice_pub.save!
+      practice_pub.publish!
 
       run_course_copy
 
       [asmnt_unpub, asmnt_pub, graded_survey_unpub, graded_survey_pub, survey_pub, survey_unpub, practice_unpub, practice_pub].each do |orig|
-        q = @copy_to.quizzes.find_by_migration_id(mig_id(orig))
-        "#{q.title} - #{q.workflow_state}".should == "#{orig.title} - #{orig.workflow_state}" # titles in there to help identify what type failed
-        q.quiz_type.should == orig.quiz_type
+        q = @copy_to.quizzes.where(migration_id: mig_id(orig)).first
+        expect("#{q.title} - #{q.published?}").to eq "#{orig.title} - #{orig.published?}" # titles in there to help identify what type failed
+        expect(q.quiz_type).to eq orig.quiz_type
       end
     end
 
     it "should export quizzes with groups that point to external banks" do
-      pending unless Qti.qti_enabled?
       course_with_teacher(:user => @user)
       different_course = @course
       different_account = Account.create!
@@ -268,38 +319,36 @@ describe ContentMigration do
       group3.assessment_question_bank = bank3
       group3.save
 
-      run_course_copy(["User didn't have permission to reference question bank in quiz group Question Group"])
+      run_course_copy(["User didn't have permission to reference question bank in quiz group #{group3.name}"])
 
-      q = @copy_to.quizzes.find_by_migration_id(mig_id(q1))
-      q.should_not be_nil
-      q.quiz_groups.count.should == 3
+      q = @copy_to.quizzes.where(migration_id: mig_id(q1)).first
+      expect(q).not_to be_nil
+      expect(q.quiz_groups.count).to eq 3
       g = q.quiz_groups[0]
-      g.assessment_question_bank_id.should == bank.id
+      expect(g.assessment_question_bank_id).to eq bank.id
       g = q.quiz_groups[1]
-      g.assessment_question_bank_id.should == bank2.id
+      expect(g.assessment_question_bank_id).to eq bank2.id
       g = q.quiz_groups[2]
-      g.assessment_question_bank_id.should == nil
+      expect(g.assessment_question_bank_id).to eq nil
     end
 
     it "should omit deleted questions in banks" do
-      pending unless Qti.qti_enabled?
       bank1 = @copy_from.assessment_question_banks.create!(:title => 'bank')
-      q1 = bank1.assessment_questions.create!(:question_data => {'name' => 'test question', 'answers' => [{'id' => 1}, {'id' => 2}]})
-      q2 = bank1.assessment_questions.create!(:question_data => {'name' => 'test question 2', 'answers' => [{'id' => 3}, {'id' => 4}]})
-      q3 = bank1.assessment_questions.create!(:question_data => {'name' => 'test question 3', 'answers' => [{'id' => 5}, {'id' => 6}]})
+      q1 = bank1.assessment_questions.create!(:question_data => {'question_name' => 'test question', 'question_type' => 'essay_question'})
+      q2 = bank1.assessment_questions.create!(:question_data => {'question_name' => 'test question 2', 'question_type' => 'essay_question'})
+      q3 = bank1.assessment_questions.create!(:question_data => {'question_name' => 'test question 3', 'question_type' => 'essay_question'})
       q2.destroy
 
       run_course_copy
 
       bank2 = @copy_to.assessment_question_banks.first
-      bank2.should be_present
+      expect(bank2).to be_present
       # we don't copy over deleted questions at all, not even marked as deleted
-      bank2.assessment_questions.active.size.should == 2
-      bank2.assessment_questions.size.should == 2
+      expect(bank2.assessment_questions.active.size).to eq 2
+      expect(bank2.assessment_questions.size).to eq 2
     end
 
     it "should not copy plain text question comments as html" do
-      pending unless Qti.qti_enabled?
       bank1 = @copy_from.assessment_question_banks.create!(:title => 'bank')
       q = bank1.assessment_questions.create!(:question_data => {
           "question_type" => "multiple_choice_question", 'name' => 'test question',
@@ -313,15 +362,14 @@ describe ContentMigration do
 
       q2 = @copy_to.assessment_questions.first
       ["correct_comments_html", "incorrect_comments_html", "neutral_comments_html", "more_comments_html"].each do |k|
-        q2.question_data.keys.should_not include(k)
+        expect(q2.question_data.keys).not_to include(k)
       end
       q2.question_data["answers"].each do |a|
-        a.keys.should_not include("comments_html")
+        expect(a.keys).not_to include("comments_html")
       end
     end
 
     it "should not copy deleted assignment attached to quizzes" do
-      pending unless Qti.qti_enabled?
       g = @copy_from.assignment_groups.create!(:name => "new group")
       quiz = @copy_from.quizzes.create(:title => "asmnt", :quiz_type => "assignment", :assignment_group_id => g.id)
       quiz.workflow_state = 'available'
@@ -337,55 +385,50 @@ describe ContentMigration do
 
       run_course_copy
 
-      @copy_to.quizzes.find_by_migration_id(mig_id(quiz)).should_not be_nil
-      @copy_to.assignments.find_by_migration_id(mig_id(asmnt)).should be_nil
+      expect(@copy_to.quizzes.where(migration_id: mig_id(quiz)).first).not_to be_nil
+      expect(@copy_to.assignments.where(migration_id: mig_id(asmnt)).first).to be_nil
     end
 
     it "should copy all quiz attributes" do
-      pending unless Qti.qti_enabled?
-      q = @copy_from.quizzes.create!(
-              :title => 'quiz',
-              :description => "<p>description eh</p>",
-              :shuffle_answers => true,
-              :show_correct_answers => true,
-              :time_limit => 20,
-              :allowed_attempts => 4,
-              :scoring_policy => 'keep_highest',
-              :quiz_type => 'survey',
-              :access_code => 'code',
-              :anonymous_submissions => true,
-              :hide_results => 'until_after_last_attempt',
-              :ip_filter => '192.168.1.1',
-              :require_lockdown_browser => true,
-              :require_lockdown_browser_for_results => true,
-              :notify_of_update => true,
-              :one_question_at_a_time => true,
-              :cant_go_back => true,
-              :require_lockdown_browser_monitor => true,
-              :lockdown_browser_monitor_data => 'VGVzdCBEYXRhCg==',
-      )
+      attributes = {
+        :title => 'quiz',
+        :description => "<p>description eh</p>",
+        :shuffle_answers => true,
+        :show_correct_answers => true,
+        :time_limit => 20,
+        :allowed_attempts => 4,
+        :scoring_policy => 'keep_highest',
+        :quiz_type => 'survey',
+        :access_code => 'code',
+        :anonymous_submissions => true,
+        :hide_results => 'until_after_last_attempt',
+        :ip_filter => '192.168.1.1',
+        :require_lockdown_browser => true,
+        :require_lockdown_browser_for_results => true,
+        :one_question_at_a_time => true,
+        :cant_go_back => true,
+        :require_lockdown_browser_monitor => true,
+        :lockdown_browser_monitor_data => 'VGVzdCBEYXRhCg==',
+        :one_time_results => true,
+        :show_correct_answers_last_attempt => true
+      }
+      q = @copy_from.quizzes.create!(attributes)
 
       run_course_copy
 
       new_quiz = @copy_to.quizzes.first
 
-      [:title, :description, :points_possible, :shuffle_answers,
-       :show_correct_answers, :time_limit, :allowed_attempts, :scoring_policy, :quiz_type,
-       :access_code, :anonymous_submissions,
-       :hide_results, :ip_filter, :require_lockdown_browser,
-       :require_lockdown_browser_for_results, :require_lockdown_browser_monitor,
-       :lockdown_browser_monitor_data].each do |prop|
-        new_quiz.send(prop).should == q.send(prop)
+      attributes.keys.each do |prop|
+        expect(new_quiz.send(prop)).to eq(q.send(prop)), "#{prop}: expected #{q.send(prop).inspect}, got #{new_quiz.send(prop).inspect}"
       end
 
     end
 
     it "should leave file references in AQ context as-is on copy" do
-      pending unless Qti.qti_enabled?
       @bank = @copy_from.assessment_question_banks.create!(:title => 'Test Bank')
       @attachment = attachment_with_context(@copy_from)
       @attachment2 = @attachment = Attachment.create!(:filename => 'test.jpg', :display_name => "test.jpg", :uploaded_data => StringIO.new('psych!'), :folder => Folder.unfiled_folder(@copy_from), :context => @copy_from)
-      data = {"name" => "Hi", "question_text" => <<-HTML.strip, "answers" => [{"id" => 1}, {"id" => 2}]}
+      data = {'question_type' => 'text_only_question', "name" => "Hi", "question_text" => <<-HTML.strip}
       File ref:<img src="/courses/#{@copy_from.id}/files/#{@attachment.id}/download">
       different file ref: <img src="/courses/#{@copy_from.id}/file_contents/course%20files/unfiled/test.jpg">
       media object: <a id="media_comment_0_l4l5n0wt" class="instructure_inline_media_comment video_comment" href="/media_objects/0_l4l5n0wt">this is a media comment</a>
@@ -394,19 +437,18 @@ describe ContentMigration do
       canvas image: <img style="max-width: 723px;" src="/images/preview.png" alt="">
       HTML
       @question = @bank.assessment_questions.create!(:question_data => data)
-      @question.reload.question_data['question_text'].should =~ %r{/assessment_questions/}
+      expect(@question.reload.question_data['question_text']).to match %r{/assessment_questions/}
 
       run_course_copy
 
       bank = @copy_to.assessment_question_banks.first
-      bank.assessment_questions.count.should == 1
+      expect(bank.assessment_questions.count).to eq 1
       aq = bank.assessment_questions.first
 
-      aq.question_data['question_text'].should match_ignoring_whitespace(@question.question_data['question_text'])
+      expect(aq.question_data['question_text']).to match_ignoring_whitespace(@question.question_data['question_text'])
     end
 
     it "should correctly copy quiz question html file references" do
-      pending unless Qti.qti_enabled?
       root = Folder.root_folders(@copy_from).first
       folder = root.sub_folders.create!(:context => @copy_from, :name => 'folder 1')
       att = Attachment.create!(:filename => 'first.jpg', :display_name => "first.jpg", :uploaded_data => StringIO.new('first'), :folder => root, :context => @copy_from)
@@ -432,26 +474,23 @@ equation: <img class="equation_image" title="Log_216" src="/equation_images/Log_
                              {:migration_id => "QUE_1017_A2", :html => "<strong>html answer 2</strong>", :comments_html =>'<i>comment</i>', :text => "", :weight => 0, :id => 2279}]}.with_indifferent_access
 
       q1 = @copy_from.quizzes.create!(:title => 'quiz1')
-      qq = q1.quiz_questions.create!
-      qq.write_attribute(:question_data, data)
-      qq.save!
+      qq = q1.quiz_questions.create!(:question_data => data)
 
       run_course_copy
 
-      @copy_to.attachments.count.should == 4
-      att_2 = @copy_to.attachments.find_by_migration_id(mig_id(att))
-      att2_2 = @copy_to.attachments.find_by_migration_id(mig_id(att2))
-      att3_2 = @copy_to.attachments.find_by_migration_id(mig_id(att3))
-      att4_2 = @copy_to.attachments.find_by_migration_id(mig_id(att4))
+      expect(@copy_to.attachments.count).to eq 4
+      att_2 = @copy_to.attachments.where(migration_id: mig_id(att)).first
+      att2_2 = @copy_to.attachments.where(migration_id: mig_id(att2)).first
+      att3_2 = @copy_to.attachments.where(migration_id: mig_id(att3)).first
+      att4_2 = @copy_to.attachments.where(migration_id: mig_id(att4)).first
 
       q_to = @copy_to.quizzes.first
       qq_to = q_to.active_quiz_questions.first
-      qq_to.question_data[:question_text].should match_ignoring_whitespace(qtext % [@copy_to.id, att_2.id, @copy_to.id, "files/#{att2_2.id}/preview", @copy_to.id, "files/#{att4_2.id}/preview"])
-      qq_to.question_data[:answers][0][:html].should match_ignoring_whitespace(%{File ref:<img src="/courses/#{@copy_to.id}/files/#{att3_2.id}/download">})
+      expect(qq_to.question_data[:question_text]).to match_ignoring_whitespace(qtext % [@copy_to.id, att_2.id, @copy_to.id, "files/#{att2_2.id}/preview", @copy_to.id, "files/#{att4_2.id}/preview"])
+      expect(qq_to.question_data[:answers][0][:html]).to match_ignoring_whitespace(%{File ref:<img src="/courses/#{@copy_to.id}/files/#{att3_2.id}/download">})
     end
 
     it "should copy all html fields in assessment questions" do
-      pending unless Qti.qti_enabled?
       @bank = @copy_from.assessment_question_banks.create!(:title => 'Test Bank')
       data = {:correct_comments_html => "<strong>correct</strong>",
                           :question_type => "multiple_choice_question",
@@ -480,27 +519,59 @@ equation: <img class="equation_image" title="Log_216" src="/equation_images/Log_
 
       run_course_copy
 
-      aq = @copy_to.assessment_questions.find_by_migration_id(mig_id(aq_from1))
+      aq = @copy_to.assessment_questions.where(migration_id: mig_id(aq_from1)).first
 
-      aq.question_data[:question_text].should == data[:question_text]
-      aq.question_data[:answers][0][:html].should == data[:answers][0][:html]
-      aq.question_data[:answers][0][:comments_html].should == data[:answers][0][:comments_html]
-      aq.question_data[:answers][1][:html].should == data[:answers][1][:html]
-      aq.question_data[:answers][1][:comments_html].should == data[:answers][1][:comments_html]
-      aq.question_data[:correct_comments_html].should == data[:correct_comments_html]
-      aq.question_data[:incorrect_comments_html].should == data[:incorrect_comments_html]
-      aq.question_data[:neutral_comments_html].should == data[:neutral_comments_html]
+      expect(aq.question_data[:question_text]).to eq data[:question_text]
+      expect(aq.question_data[:answers][0][:html]).to eq data[:answers][0][:html]
+      expect(aq.question_data[:answers][0][:comments_html]).to eq data[:answers][0][:comments_html]
+      expect(aq.question_data[:answers][1][:html]).to eq data[:answers][1][:html]
+      expect(aq.question_data[:answers][1][:comments_html]).to eq data[:answers][1][:comments_html]
+      expect(aq.question_data[:correct_comments_html]).to eq data[:correct_comments_html]
+      expect(aq.question_data[:incorrect_comments_html]).to eq data[:incorrect_comments_html]
+      expect(aq.question_data[:neutral_comments_html]).to eq data[:neutral_comments_html]
 
       # and the matching question
-      aq = @copy_to.assessment_questions.find_by_migration_id(mig_id(aq_from2))
-      aq.question_data[:answers][0][:html].should == data2[:answers][0][:html]
-      aq.question_data[:answers][0][:left_html].should == data2[:answers][0][:left_html]
-      aq.question_data[:answers][1][:html].should == data2[:answers][1][:html]
-      aq.question_data[:answers][1][:left_html].should == data2[:answers][1][:left_html]
+      aq = @copy_to.assessment_questions.where(migration_id: mig_id(aq_from2)).first
+      expect(aq.question_data[:answers][0][:html]).to eq data2[:answers][0][:html]
+      expect(aq.question_data[:answers][0][:left_html]).to eq data2[:answers][0][:left_html]
+      expect(aq.question_data[:answers][1][:html]).to eq data2[:answers][1][:html]
+      expect(aq.question_data[:answers][1][:left_html]).to eq data2[:answers][1][:left_html]
+    end
+
+    it "should correctly copy matching question fields with html-lookalike text" do
+      @bank = @copy_from.assessment_question_banks.create!(:title => 'Test Bank')
+      data = {:question_type => "matching_question",
+              :points_possible => 10,
+              :question_text => "text",
+              :matches => [{:match_id=>4835, :text=>"<i>aasdf</i>"},
+                           {:match_id=>6247, :text=>"<p>not good"}],
+              :answers => [{:id => 2939, :text => "<p>srsly is all text</p> <img totes & bork", :match_id=>4835},
+                           {:id => 2940, :html => "<img src=\"http://example.com\">good ol html", :match_id=>6247}]
+      }.with_indifferent_access
+      aq_from = @bank.assessment_questions.create!(:question_data => data)
+
+      quiz = @copy_from.quizzes.create!(:title => "survey pub", :quiz_type => "survey")
+      qq_from = quiz.quiz_questions.new(:assessment_question => aq_from)
+      qq_from.write_attribute(:question_data, data)
+      qq_from.save!
+      quiz.generate_quiz_data
+      quiz.save!
+
+      run_course_copy
+
+      aq = @copy_to.assessment_questions.where(migration_id: mig_id(aq_from)).first
+      qq = @copy_to.quizzes.first.quiz_questions.first
+
+      [aq, qq].each do |q|
+        expect(q.question_data[:question_text]).to eq data[:question_text]
+        expect(q.question_data[:matches][0][:text]).to eq data[:matches][0][:text]
+        expect(q.question_data[:matches][1][:text]).to eq data[:matches][1][:text]
+        expect(q.question_data[:answers][0][:text]).to eq data[:answers][0][:text]
+        expect(q.question_data[:answers][1][:html]).to eq data[:answers][1][:html]
+      end
     end
 
     it "should copy file_upload_questions" do
-      pending unless Qti.qti_enabled?
       bank = @copy_from.assessment_question_banks.create!(:title => 'Test Bank')
       data = {:question_type => "file_upload_question",
               :points_possible => 10,
@@ -517,23 +588,22 @@ equation: <img class="equation_image" title="Log_216" src="/equation_images/Log_
 
       run_course_copy
 
-      @copy_to.assessment_questions.count.should == 2
+      expect(@copy_to.assessment_questions.count).to eq 2
       @copy_to.assessment_questions.each do |aq|
-        aq.question_data['question_type'].should == data[:question_type]
-        aq.question_data['question_text'].should == data[:question_text]
+        expect(aq.question_data['question_type']).to eq data[:question_type]
+        expect(aq.question_data['question_text']).to eq data[:question_text]
       end
 
-      @copy_to.quizzes.count.should == 1
+      expect(@copy_to.quizzes.count).to eq 1
       quiz = @copy_to.quizzes.first
-      quiz.active_quiz_questions.size.should == 1
+      expect(quiz.active_quiz_questions.size).to eq 1
 
       qq = quiz.active_quiz_questions.first
-      qq.question_data['question_type'].should == data[:question_type]
-      qq.question_data['question_text'].should == data[:question_text]
+      expect(qq.question_data['question_type']).to eq data[:question_type]
+      expect(qq.question_data['question_text']).to eq data[:question_text]
     end
 
     it "should leave text answers as text" do
-      pending unless Qti.qti_enabled?
       @bank = @copy_from.assessment_question_banks.create!(:title => 'Test Bank')
       data = {
                           :question_type => "multiple_choice_question",
@@ -548,18 +618,16 @@ equation: <img class="equation_image" title="Log_216" src="/equation_images/Log_
 
       run_course_copy
 
-      aq = @copy_to.assessment_questions.find_by_migration_id(mig_id(aq_from1))
+      aq = @copy_to.assessment_questions.where(migration_id: mig_id(aq_from1)).first
 
-      aq.question_data[:answers][0][:text].should == data[:answers][0][:text]
-      aq.question_data[:answers][1][:text].should == data[:answers][1][:text]
-      aq.question_data[:answers][0][:html].should be_nil
-      aq.question_data[:answers][1][:html].should be_nil
-      aq.question_data[:question_text].should == data[:question_text]
+      expect(aq.question_data[:answers][0][:text]).to eq data[:answers][0][:text]
+      expect(aq.question_data[:answers][1][:text]).to eq data[:answers][1][:text]
+      expect(aq.question_data[:answers][0][:html]).to be_nil
+      expect(aq.question_data[:answers][1][:html]).to be_nil
+      expect(aq.question_data[:question_text]).to eq data[:question_text]
     end
 
     it "should retain imported quiz questions in their original assessment question banks" do
-      pending unless Qti.qti_enabled?
-
       data = {'question_name' => 'test question 1', 'question_type' => 'essay_question', 'question_text' => 'blah'}
 
       aqb = @copy_from.assessment_question_banks.create!(:title => "oh noes")
@@ -571,31 +639,36 @@ equation: <img class="equation_image" title="Log_216" src="/equation_images/Log_
 
       run_course_copy
 
-      aqb2 = @copy_to.assessment_question_banks.find_by_migration_id(mig_id(aqb))
-      aqb2.assessment_questions.count.should == 1
+      aqb2 = @copy_to.assessment_question_banks.where(migration_id: mig_id(aqb)).first
+      expect(aqb2.assessment_questions.count).to eq 1
 
-      quiz2 = @copy_to.quizzes.find_by_migration_id(mig_id(quiz))
-      quiz2.quiz_questions.count.should == 1
+      quiz2 = @copy_to.quizzes.where(migration_id: mig_id(quiz)).first
+      expect(quiz2.quiz_questions.count).to eq 1
       qq2 = quiz2.quiz_questions.first
-      qq2.assessment_question_id.should == aqb2.assessment_questions.first.id
-      qq2.question_data['points_possible'].should == qq.question_data['points_possible']
+      expect(qq2.assessment_question_id).to eq aqb2.assessment_questions.first.id
+      expect(qq2.question_data['points_possible']).to eq qq.question_data['points_possible']
     end
 
-    it "should copy the assignment group in selective copy" do
-      pending unless Qti.qti_enabled?
+    it "should copy the assignment group in full copy" do
+      group = @copy_from.assignment_groups.create!(:name => "new group")
+      quiz = @copy_from.quizzes.create(:title => "asmnt", :quiz_type => "assignment", :assignment_group_id => group.id)
+      quiz.publish!
+      run_course_copy
+      dest_quiz = @copy_to.quizzes.where(migration_id:  mig_id(quiz)).first
+      expect(dest_quiz.assignment_group.migration_id).to eql mig_id(group)
+    end
 
+    it "should not copy the assignment group in selective copy" do
       group = @copy_from.assignment_groups.create!(:name => "new group")
       quiz = @copy_from.quizzes.create(:title => "asmnt", :quiz_type => "assignment", :assignment_group_id => group.id)
       quiz.publish!
       @cm.copy_options = { 'everything' => '0', 'quizzes' => { mig_id(quiz) => "1" } }
       run_course_copy
-      dest_quiz = @copy_to.quizzes.find_by_migration_id mig_id(quiz)
-      dest_quiz.assignment_group.migration_id.should eql mig_id(group)
+      dest_quiz = @copy_to.quizzes.where(migration_id:  mig_id(quiz)).first
+      expect(dest_quiz.assignment_group.migration_id).to be_nil
     end
 
     it "should not copy the assignment group in selective export" do
-      pending unless Qti.qti_enabled?
-
       group = @copy_from.assignment_groups.create!(:name => "new group")
       quiz = @copy_from.quizzes.create(:title => "asmnt", :quiz_type => "assignment", :assignment_group_id => group.id)
       quiz.publish!
@@ -605,9 +678,248 @@ equation: <img class="equation_image" title="Log_216" src="/equation_images/Log_
       run_export_and_import do |export|
         export.selected_content = { 'quizzes' => { mig_id(quiz) => "1" } }
       end
-      dest_quiz = @copy_to.quizzes.find_by_migration_id mig_id(quiz)
-      dest_quiz.assignment_group.migration_id.should_not eql decoy_assignment_group
-      decoy_assignment_group.reload.name.should_not eql group.name
+      dest_quiz = @copy_to.quizzes.where(migration_id:  mig_id(quiz)).first
+      expect(dest_quiz.assignment_group.migration_id).not_to eql decoy_assignment_group
+      expect(decoy_assignment_group.reload.name).not_to eql group.name
+    end
+
+    it "should round numeric answer margins sanely" do
+      q = @copy_from.quizzes.create!(:title => "blah")
+      # this one targets rounding errors in gems/plugins/qti_exporter/lib/qti/numeric_interaction.rb (import side)
+      data1 = {:question_type => "numerical_question",
+               :question_text => "what is the optimal matter/antimatter intermix ratio",
+               :answers => [{
+                 :text => "answer_text",
+                 :weight => 100,
+                 :numerical_answer_type => "exact_answer",
+                 :answer_exact => 1,
+                 :answer_error_margin => 0.0001
+               }]}.with_indifferent_access
+      # this one targets rounding errors in lib/cc/qti/qti_items.rb (export side)
+      data2 = {:question_type => "numerical_question",
+               :question_text => "what is the airspeed velocity of an unladed African swallow",
+               :answers => [{
+                 :text => "answer_text",
+                 :weight => 100,
+                 :numerical_answer_type => "exact_answer",
+                 :answer_exact => 2.0009,
+                 :answer_error_margin => 0.0001
+               }]}.with_indifferent_access
+
+      q.quiz_questions.create!(:question_data => data1)
+      q.quiz_questions.create!(:question_data => data2)
+      run_course_copy
+
+      q2 = @copy_to.quizzes.where(migration_id: mig_id(q)).first
+      expect(q2.quiz_questions[0].question_data["answers"][0]["margin"].to_s).to eq "0.0001"
+      expect(q2.quiz_questions[1].question_data["answers"][0]["margin"].to_s).to eq "0.0001"
+    end
+
+    it "should not combine when copying question banks with the same title" do
+      data = {'question_name' => 'test question 1', 'question_type' => 'essay_question', 'question_text' => 'blah'}
+
+      bank1 = @copy_from.assessment_question_banks.create!(:title => "oh noes i have the same title")
+      bank2 = @copy_from.assessment_question_banks.create!(:title => "oh noes i have the same title")
+
+      bank1.assessment_questions.create!(:question_data => data)
+      bank2.assessment_questions.create!(:question_data => data)
+
+      quiz = @copy_from.quizzes.create!(:title => "ruhroh")
+
+      group1 = quiz.quiz_groups.create!(:name => "group", :pick_count => 2, :question_points => 5.0)
+      group1.assessment_question_bank = bank1
+      group1.save
+      group2 = quiz.quiz_groups.create!(:name => "group2", :pick_count => 1, :question_points => 2.0)
+      group2.assessment_question_bank = bank2
+      group2.save
+
+      run_course_copy
+
+      bank1_copy = @copy_to.assessment_question_banks.where(:migration_id => mig_id(bank1)).first
+      bank2_copy = @copy_to.assessment_question_banks.where(:migration_id => mig_id(bank2)).first
+
+      expect(bank1_copy).to_not be_nil
+      expect(bank2_copy).to_not be_nil
+
+      quiz_copy = @copy_to.quizzes.where(:migration_id => mig_id(quiz)).first
+      expect(quiz_copy.quiz_groups.count).to eq 2
+      group1_copy = quiz_copy.quiz_groups.where(:migration_id => mig_id(group1)).first
+      group2_copy = quiz_copy.quiz_groups.where(:migration_id => mig_id(group2)).first
+
+      expect(group1_copy.assessment_question_bank_id).to eq bank1_copy.id
+      expect(group1_copy.pick_count).to eq group1.pick_count
+      expect(group1_copy.name).to eq group1.name
+      expect(group2_copy.assessment_question_bank_id).to eq bank2_copy.id
+    end
+
+    it "should copy stuff" do
+      data1 = {:question_type => "file_upload_question",
+               :points_possible => 10,
+               :question_text => "why is this question terrible"
+      }.with_indifferent_access
+
+      data2 = {:question_type => "essay_question",
+               :points_possible => 10,
+               :question_text => "so terrible"
+      }.with_indifferent_access
+
+      data3 = {
+          :question_type => "multiple_choice_question",
+          :question_name => "test fun",
+          :name => "test fun",
+          :points_possible => 10,
+          :question_text => "<strong>html for fun</strong>",
+          :answers =>
+              [{:migration_id => "QUE_1016_A1", :text => "<br />", :weight => 100, :id => 8080},
+               {:migration_id => "QUE_1017_A2", :text => "<pre>", :weight => 0, :id => 2279}]}.with_indifferent_access
+
+      q = @copy_from.quizzes.create!(:title => "survey pub", :quiz_type => "survey")
+      q.quiz_questions.create!(:question_data => data1)
+      q.quiz_questions.create!(:question_data => data2)
+      q.quiz_questions.create!(:question_data => data3)
+      q.generate_quiz_data
+      q.save!
+
+      run_course_copy
+      q_copy = @copy_to.quizzes.where(:migration_id => mig_id(q)).first
+      expect(q_copy.quiz_questions.count).to eq 3
+      q_copy.quiz_questions.each do |qq|
+        # should link quiz questions
+        expect(qq.assessment_question_id).to_not be_nil
+      end
+
+      @cm.copy_options = {:all_quizzes => true}
+      run_course_copy
+
+      # should not duplicate the questions
+      q_copy.reload
+      expect(q_copy.quiz_questions.count).to eq 3
+      q_copy.quiz_questions.each do |qq|
+        # should unlink them since the new quiz questions are possibly overwritten
+        expect(qq.assessment_question_id).to be_nil
+      end
+
+      @cm.copy_options = {:everything => true}
+      run_course_copy
+
+      q_copy.reload
+      expect(q_copy.quiz_questions.count).to eq 3
+      q_copy.quiz_questions.each do |qq|
+        # should re-link them
+        expect(qq.assessment_question_id).to_not be_nil
+      end
+    end
+
+    it "should not try to restore deleted quizzes to an unpublished state if unable to" do
+      quiz_from = @copy_from.quizzes.create!(:title => "ruhroh")
+      quiz_from.did_edit
+      quiz_from.offer!
+      a_from = quiz_from.assignment
+
+      run_course_copy
+
+      a_from.unpublish!
+      quiz_from.unpublish!
+
+      @copy_to.offer!
+      student_in_course(:course => @copy_to, :active_user => true)
+
+      quiz_to = @copy_to.quizzes.where(:migration_id => mig_id(quiz_from)).first
+      Quizzes::QuizSubmission.create!(:quiz => quiz_to, :user => @student)
+      expect(quiz_to.can_unpublish?).to be_falsey
+
+      a_to = @copy_to.assignments.where(:migration_id => mig_id(a_from)).first
+      a_to.destroy
+      quiz_to.destroy
+
+      run_course_copy
+
+      quiz_to.reload
+      a_to.reload
+      expect(quiz_to).to be_published
+      expect(quiz_to.assignment).to eq a_to
+      expect(a_to).to be_published
+    end
+
+    it "should correctly copy links to quizzes inside assessment questions" do
+      link_quiz = @copy_from.quizzes.create!(:title => "linked quiz")
+
+      html = "<a href=\"/courses/%s/quizzes/%s\">linky</a>"
+
+      bank = @copy_from.assessment_question_banks.create!(:title => 'bank')
+      data = {'question_name' => 'test question', 'question_type' => 'essay_question',
+        'question_text' => (html % [@copy_from.id, link_quiz.id])}
+      aq = bank.assessment_questions.create!(:question_data => data)
+
+      other_quiz = @copy_from.quizzes.create!(:title => "other quiz")
+      qq = other_quiz.quiz_questions.create!(:question_data => data)
+      other_quiz.generate_quiz_data
+      other_quiz.published_at = Time.now
+      other_quiz.workflow_state = 'available'
+      other_quiz.save!
+
+      run_course_copy
+
+      link_quiz2 = @copy_to.quizzes.where(migration_id: mig_id(link_quiz)).first
+      expected_html = (html % [@copy_to.id, link_quiz2.id])
+
+      other_quiz2 = @copy_to.quizzes.where(migration_id: mig_id(other_quiz)).first
+      aq2 = @copy_to.assessment_questions.where(migration_id: mig_id(aq)).first
+      qq2 = other_quiz2.quiz_questions.first
+
+      expect(aq2.question_data['question_text']).to eq expected_html
+      expect(qq2.question_data['question_text']).to eq expected_html
+      expect(other_quiz2.quiz_data.first['question_text']).to eq expected_html
+    end
+
+    it "should correctly copy links to quizzes inside standalone quiz questions" do
+      # i.e. quiz questions imported independently from their original assessment question
+      link_quiz = @copy_from.quizzes.create!(:title => "linked quiz")
+
+      html = "<a href=\"/courses/%s/quizzes/%s\">linky</a>"
+
+      bank = @copy_from.assessment_question_banks.create!(:title => 'bank')
+      data = {'question_name' => 'test question', 'question_type' => 'essay_question',
+        'question_text' => (html % [@copy_from.id, link_quiz.id])}
+      aq = bank.assessment_questions.create!(:question_data => data)
+
+      other_quiz = @copy_from.quizzes.create!(:title => "other quiz")
+      qq = other_quiz.quiz_questions.create!(:question_data => data)
+      other_quiz.generate_quiz_data
+      other_quiz.published_at = Time.now
+      other_quiz.workflow_state = 'available'
+      other_quiz.save!
+
+      @cm.copy_options = {
+        :quizzes => {mig_id(link_quiz) => "1", mig_id(other_quiz) => "1"}
+      }
+      run_course_copy
+
+      link_quiz2 = @copy_to.quizzes.where(migration_id: mig_id(link_quiz)).first
+      expected_html = (html % [@copy_to.id, link_quiz2.id])
+
+      other_quiz2 = @copy_to.quizzes.where(migration_id: mig_id(other_quiz)).first
+      qq2 = other_quiz2.quiz_questions.first
+
+      expect(qq2.question_data['question_text']).to eq expected_html
+      expect(other_quiz2.quiz_data.first['question_text']).to eq expected_html
+    end
+
+    it "should properly copy escaped brackets in html comments" do
+      bank1 = @copy_from.assessment_question_banks.create!(:title => 'bank')
+      text = "&lt;braaackets&gt;"
+      q = bank1.assessment_questions.create!(:question_data => {
+          "question_type" => "multiple_choice_question", 'name' => 'test question',
+          'answers' => [{'id' => 1, "text" => "Correct", "weight" => 100, "comments_html" => text},
+            {'id' => 2, "text" => "inorrect", "weight" => 0}],
+          "correct_comments_html" => text
+        })
+
+      run_course_copy
+
+      q2 = @copy_to.assessment_questions.first
+      expect(q2.question_data['correct_comments_html']).to eq text
+      expect(q2.question_data['answers'].first['comments_html']).to eq text
     end
   end
 end

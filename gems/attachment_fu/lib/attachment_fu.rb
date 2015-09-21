@@ -213,7 +213,7 @@ module AttachmentFu # :nodoc:
 
     # Copies the given file path to a new tempfile, returning the closed tempfile.
     def copy_to_temp_file(file, temp_base_name)
-      Tempfile.new([nil,temp_base_name], AttachmentFu.tempfile_path).tap do |tmp|
+      Tempfile.new(['',temp_base_name], AttachmentFu.tempfile_path).tap do |tmp|
         tmp.close
         FileUtils.cp file, tmp.path
       end
@@ -221,7 +221,7 @@ module AttachmentFu # :nodoc:
 
     # Writes the given data to a new tempfile, returning the closed tempfile.
     def write_to_temp_file(data, temp_base_name)
-      Tempfile.new([nil,temp_base_name], AttachmentFu.tempfile_path).tap do |tmp|
+      Tempfile.new(['',temp_base_name], AttachmentFu.tempfile_path).tap do |tmp|
         tmp.binmode
         tmp.write data
         tmp.close
@@ -269,7 +269,10 @@ module AttachmentFu # :nodoc:
           :temp_path                => temp_file,
           :thumbnail_resize_options => size
         }
-        thumb.save!
+        if thumb.valid?
+          thumb.process_attachment
+          thumb.save!
+        end
       end
     end
 
@@ -281,10 +284,12 @@ module AttachmentFu # :nodoc:
         res = self.create_or_update_thumbnail(tmp, target_size.to_s, actual_size)
       rescue AWS::S3::Errors::NoSuchKey => e
         logger.warn("error when trying to make thumbnail for attachment_id: #{self.id} (the image probably doesn't exist on s3) error details: #{e.inspect}")
+      rescue ThumbnailError => e
+        logger.warn("error creating thumbnail for attachment_id #{self.id}: #{e.inspect}")
       ensure
         tmp.unlink if tmp
       end
-      
+
       res
     end
 
@@ -363,7 +368,7 @@ module AttachmentFu # :nodoc:
             io = File.open(self.temp_path, 'rb')
           end
           io.rewind
-          io.each_line do |line| 
+          io.each_line do |line|
             digest.update(line)
             read_bytes = true
           end
@@ -393,10 +398,13 @@ module AttachmentFu # :nodoc:
     end
 
     def find_existing_attachment_for_md5
-      if self.md5.present? && ns = self.infer_namespace
-        scope = Attachment.where(:md5 => md5, :namespace => ns, :root_attachment_id => nil, :content_type => content_type)
-        scope = scope.where("id<>?", self) unless new_record?
-        scope.first
+      self.shard.activate do
+        if self.md5.present? && ns = self.infer_namespace
+          scope = Attachment.where(:md5 => md5, :namespace => ns, :root_attachment_id => nil, :content_type => content_type)
+          scope = scope.where("filename IS NOT NULL")
+          scope = scope.where("id<>?", self) unless new_record?
+          scope.detect { |a| a.store.exists? }
+        end
       end
     end
 
@@ -413,7 +421,7 @@ module AttachmentFu # :nodoc:
         'unknown/unknown'
       end
     end
-    
+
     # Gets the latest temp path from the collection of temp paths.  While working with an attachment,
     # multiple Tempfile objects may be created for various processing purposes (resizing, for example).
     # An array of all the tempfile objects is stored so that the Tempfile instance is held on to until
@@ -503,9 +511,9 @@ module AttachmentFu # :nodoc:
 
       # Initializes a new thumbnail with the given suffix.
       def find_or_initialize_thumbnail(file_name_suffix)
-        respond_to?(:parent_id) ?
-          thumbnail_class.find_or_initialize_by_thumbnail_and_parent_id(file_name_suffix.to_s, id) :
-          thumbnail_class.find_or_initialize_by_thumbnail(file_name_suffix.to_s)
+        scope = thumbnail_class.where(thumbnail: file_name_suffix.to_s)
+        scope = scope.where(parent_id: id) if respond_to?(:parent_id)
+        scope.first_or_initialize
       end
 
       # Stub for a #process_attachment method in a processor

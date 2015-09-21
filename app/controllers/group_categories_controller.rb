@@ -92,7 +92,7 @@ class GroupCategoriesController < ApplicationController
   include Api::V1::Group
   include Api::V1::Progress
 
-  SETTABLE_GROUP_ATTRIBUTES = %w(name description join_level is_public group_category avatar_attachment)
+  SETTABLE_GROUP_ATTRIBUTES = %w(name description join_level is_public group_category avatar_attachment).freeze
 
   include TextHelper
 
@@ -260,7 +260,7 @@ class GroupCategoriesController < ApplicationController
 
   # @API Delete a Group Category
   # Deletes a group category and all groups under it. Protected group
-  # categories can not be deleted, i.e. "communities", "student_organized", and "imported".
+  # categories can not be deleted, i.e. "communities" and "student_organized".
   #
   # @example_request
   #     curl https://<canvas>/api/v1/group_categories/<group_category_id> \
@@ -332,7 +332,6 @@ class GroupCategoriesController < ApplicationController
     end
 
     search_term = params[:search_term].presence
-
     search_params = params.slice(:search_term)
     search_params[:enrollment_type] = "student" if @context.is_a? Course
 
@@ -347,7 +346,7 @@ class GroupCategoriesController < ApplicationController
     end
 
     users = Api.paginate(users, self, api_v1_group_category_users_url)
-    render :json => users.map { |u| user_json(u, @current_user, session, [], @context) }
+    render :json => users_json(users, @current_user, session, Array(params[:include]), @context, nil, Array(params[:exclude]))
   end
 
   # @API Assign unassigned members
@@ -473,10 +472,27 @@ class GroupCategoriesController < ApplicationController
     true
   end
 
+  def clone_with_name
+    if authorized_action(get_category_context, @current_user, :manage_groups)
+      GroupCategory.transaction do
+        group_category = GroupCategory.active.find(params[:id])
+        new_group_category = group_category.dup
+        new_group_category.name = params[:name]
+        begin
+          new_group_category.save!
+          group_category.clone_groups_and_memberships(new_group_category)
+          render :json => new_group_category
+        rescue ActiveRecord::RecordInvalid
+          render :json => new_group_category.errors, :status => :bad_request
+        end
+      end
+    end
+  end
+
   protected
   def get_category_context
     begin
-      @group_category = api_request? ? GroupCategory.find(params[:group_category_id]) : GroupCategory.find(params[:id])
+      @group_category = api_request? ? GroupCategory.active.find(params[:group_category_id]) : GroupCategory.active.find(params[:id])
     rescue ActiveRecord::RecordNotFound
       return render(:json => {'status' => 'not found'}, :status => :not_found) unless @group_category
     end

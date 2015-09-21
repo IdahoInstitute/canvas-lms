@@ -6,7 +6,7 @@
 -%>
 <%
   js_bundle :submit_assignment
-  jammit_css :tinymce
+  css_bundle :tinymce
   js_env({
     :SUBMIT_ASSIGNMENT => {
       :ALLOWED_EXTENSIONS => (@assignment.allowed_extensions || []),
@@ -36,7 +36,7 @@
         <li><a href="#submit_from_external_tool_form_<%= external_tool.id %>"
           class="external-tool"
           data-id="<%= external_tool.id %>"
-          data-name="<%= external_tool.name %>"><%= external_tool.name %></a></li>
+          data-name="<%= external_tool.name %>"><%= external_tool.label_for(:homework_submission, I18n.locale) %></a></li>
       <% end %>
       <% if @external_tools.length > 3 %>
         <li><a href="#submit_from_external_tool_form" class="submit_from_external_tool_option"><%= t 'links.submit.external_tool', "More" %></a></li>
@@ -197,13 +197,14 @@
     }
     #google_docs_tree li.file .filename {
       float: left;
+      max-width: 98%;
     }
     #google_docs_tree li.file .popout {
       float: right;
     }
     </style>
     <% if show_google_docs %>
-      <% if @google_docs_token %>
+      <% if @google_docs_token  and not @google_drive_upgrade%>
         <% if @domain_root_account.feature_enabled?(:google_docs_domain_restriction) &&
               @domain_root_account.settings[:google_docs_domain] &&
              !@current_user.gmail.match(%r{@#{@domain_root_account.settings[:google_docs_domain]}$}) %>
@@ -267,6 +268,13 @@
             </div>
           <% end %>
         <% end %>
+      <% elsif @google_drive_upgrade %>
+        <div id="submit_google_doc_form">
+          <%= t 'messages.google_drives_auth_required', "Before you can submit assignments directly from Google Drive you need to authorize Canvas to access your Google Drive account:" %>
+          <div style="font-size: 1.1em; text-align: center; margin: 10px;">
+            <a class="btn" href="<%= oauth_url(:service => :google_drive, :return_to => (request.url + "#submit_google_doc_form")) %>"><%= t 'links.authorize_google_drive', "Authorize Google Drive Access" %></a>
+          </div>
+        </div>
       <% else %>
         <div id="submit_google_doc_form">
           <%= t 'messages.google_docs_auth_required', "Before you can submit assignments directly from Google Docs you need to authorize Canvas to access your Google Docs account:" %>
@@ -276,6 +284,7 @@
         </div>
       <% end %>
     <% end %>
+
     <% if @assignment.submission_types && @assignment.submission_types.match(/media_recording/) %>
       <% if !feature_enabled?(:kaltura) %>
         <div id="submit_media_recording_form">

@@ -50,9 +50,11 @@ module IncomingMailProcessor
     rescue
     end
 
-    def each_message
+    def each_message(opts={})
       @imap.select(@folder)
-      @imap.search(@filter).each do |message_id|
+      message_ids = @imap.search(@filter)
+      message_ids = message_ids.select{|id| id % opts[:stride] == opts[:offset]} if opts[:stride] && opts[:offset]
+      message_ids.each do |message_id|
         body = @imap.fetch(message_id, "RFC822")[0].attr["RFC822"]
         yield message_id, body
       end
@@ -72,6 +74,13 @@ module IncomingMailProcessor
       delete_message(message_id)
     end
 
+    def unprocessed_message_count
+      connect
+      @imap.select("INBOX")
+      length = @imap.search(["X-GM-RAW", "label:unread"]).length
+      disconnect
+      length
+    end
   end
 
 end

@@ -36,10 +36,10 @@ module CC::Importer::Canvas
 
       file_map
     end
-    
+
     def convert_file_metadata(file_map)
       path = File.join(@unzipped_file_path, COURSE_SETTINGS_DIR, FILES_META)
-      return unless File.exists? path
+      return unless File.exist? path
       doc = open_file_xml path
 
       if folders = doc.at_css('folders')
@@ -57,8 +57,26 @@ module CC::Importer::Canvas
           if file_map[id]
             file_map[id][:hidden] = true if get_bool_val(file, 'hidden', false)
             file_map[id][:locked] = true if get_bool_val(file, 'locked', false)
+
+            if unlock_at = get_time_val(file, 'unlock_at')
+              file_map[id][:unlock_at] = unlock_at
+            end
+            if lock_at = get_time_val(file, 'lock_at')
+              file_map[id][:lock_at] = lock_at
+            end
+
             if display_name = file.at_css("display_name")
               file_map[id][:display_name] = display_name.text
+            end
+            if usage_rights = file.at_css("usage_rights")
+              rights_hash = { :use_justification => usage_rights.attr('use_justification') }
+              if legal_copyright = usage_rights.at_css('legal_copyright')
+                rights_hash.merge!(:legal_copyright => legal_copyright.text)
+              end
+              if license = usage_rights.at_css('license')
+                rights_hash.merge!(:license => license.text)
+              end
+              file_map[id][:usage_rights] = rights_hash
             end
           end
         end

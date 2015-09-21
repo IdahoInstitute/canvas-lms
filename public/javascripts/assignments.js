@@ -125,7 +125,7 @@ define([
     var id = $assignment.attr('id');
     data.due_at = "";
     if(due_at) {
-      data.due_at = due_at.toString($.datetime.defaultFormat);
+      data.due_at = $.datetimeString(due_at);
     }
     if (id == 'assignment_new') {
       if(defaultShowDateOptions) {
@@ -152,7 +152,7 @@ define([
     if ( data.multiple_due_dates === "true" && id !== 'assignment_new' ) {
       var $dateInput = $form.find('.input-append');
       $dateInput.before($("<span class=vdd_no_edit>" +
-                           I18n.t('multiple_due_dates','Multiple Due Dates')+
+                           htmlEscape(I18n.t('multiple_due_dates','Multiple Due Dates'))+
                             "</span>"));
       $dateInput.hide();
       $form.find('.ui-datepicker-trigger').hide();
@@ -445,7 +445,7 @@ define([
       var data = $(this).parents("form").getFormData({object_name: 'assignment'});
       var params = {};
       if(data.title) { params['title'] = data.title; }
-      if(data.due_at) { params['due_at'] = $.datetime.process(data.due_at); }
+      if(data.due_at) { params['due_at'] = date.due_at; }
       if (data.points_possible) { params['points_possible'] = data.points_possible; }
       if(data.assignment_group_id) { params['assignment_group_id'] = data.assignment_group_id; }
       if(data.submission_types) { params['submission_types'] = data.submission_types; }
@@ -594,7 +594,7 @@ define([
       $(this).hide();
       $(this).parents(".assignment_group").find(".hide_info_link").show().end()
         .find(".more_info").show();
-      var rules = "";
+      var rulesHtml = "";
       var ruleData = $(this).parents(".assignment_group").find(".rules").text().split("\n");
       $.each(ruleData, function(idx, rule) {
         var parts = rule.split(":");
@@ -602,16 +602,16 @@ define([
           var rule_type = parts[0];
           var value = parts[1];
           if(rule_type == "drop_lowest") {
-            rules += htmlEscape(I18n.t('drop_lowest_scores', "Drop the Lowest %{number} Scores", {number: value})) + "<br/>";
+            rulesHtml += htmlEscape(I18n.t('drop_lowest_scores', "Drop the Lowest %{number} Scores", {number: value})) + "<br/>";
           } else if(rule_type == "drop_highest") {
-            rules += htmlEscape(I18n.t('drop_highest_scores', "Drop the Highest %{number} Scores", {number: value})) + "<br/>";
+            rulesHtml += htmlEscape(I18n.t('drop_highest_scores', "Drop the Highest %{number} Scores", {number: value})) + "<br/>";
           } else if(rule_type == "never_drop") {
             var title = $("#assignment_" + value).find(".title").text();
-            rules += htmlEscape(I18n.t('never_drop_scores', "Never Drop %{assignment_name}", {assignment_name: title})) + "<br/>";
+            rulesHtml += htmlEscape(I18n.t('never_drop_scores', "Never Drop %{assignment_name}", {assignment_name: title})) + "<br/>";
           }
         }
       });
-      $(this).parents(".assignment_group").find(".rule_details").html(rules);
+      $(this).parents(".assignment_group").find(".rule_details").html(rulesHtml);
     });
     $(".hide_info_link").click(function(event) {
       event.preventDefault();
@@ -847,13 +847,6 @@ define([
     $("#add_assignment_form").formSubmit({
       object_name: 'assignment',
       required: ['title'],
-      processData: function(data) {
-        var formData = $(this).getFormData({object_name: "assignment"});
-        if(formData['assignment[due_at]']) {
-          formData['assignment[due_at]'] = $.datetime.process(formData['assignment[due_at]']);
-        }
-        return formData;
-      },
       beforeSubmit: function(data) {
         var $assignment = $(this).parents(".group_assignment");
         $assignment.fillTemplateData({ data: data });

@@ -1,16 +1,22 @@
 <%
-   group = question_group || nil
+   question_group ||= nil
+   group = question_group
    if group && hash_get(group, :assessment_question_bank_id)
      question_bank = @banks_hash[hash_get(group, :assessment_question_bank_id)]
    end
+  if group
+    roles_stuff = %Q|role="region" aria-label="#{t('Question Group')}"|
+  end
 %>
-<div class="quiz_sortable group_top <%= 'question_bank_top' if question_bank %>" style="<%= "display: none;" unless group %>" id="group_top_<%= hash_get(group, :id, 'template') %>">
+<div <%= roles_stuff ? roles_stuff : nil %> class="quiz_sortable group_top <%= 'question_bank_top' if question_bank %>" style="<%= "display: none;" unless group %>" id="group_top_<%= hash_get(group, :id, 'template') %>">
   <%= form_for :quiz_group, :url => context_url(@context, :context_quiz_quiz_groups_url, @quiz.id), :html => {:class => "quiz_group_form"} do |f| %>
+    <% if can_do(@quiz, @current_user, :update) %>
     <%= render partial: "quizzes/quizzes/move_handle" %>
+    <% end %>
 
   <div style="float: left;">
     <input type="hidden" name="quiz_group[assessment_question_bank_id]" class="bank_id"/>
-    <span class="group_display name" style="font-weight: bold; padding-right: 20px;"><%= hash_get(group, :name, t(:default_group_name, "Group")) %></span>
+    <h2 class="group_display name"><%= hash_get(group, :name, t(:default_group_name, "Group")) %></h2>
     <input name="quiz_group[name]" aria-label=<%= t('labels.group_name', "Group Name") %> type="text" value="Group Name" class="group_edit" value="<%= hash_get(group, :name, t(:default_group_name, "Group")) %>"/>
     <span class="group_display">
       <%= t(:show_questions_and_points, "Pick *%{num_questions}* questions, #%{num_points}# pts per question",
@@ -68,7 +74,7 @@
   </div>
 <% end %>
 <% hash_get(group, :questions, []).each do |question| %>
-  <%= render :partial => "display_question", :object => question, :locals => {:in_group => true, :editing => true, :asset_string => "quiz_question_#{question['id']}"} %>
+  <%= render :partial => "display_question", :object => question, :locals => {:in_group => true, :editing => true, :asset_string => "quiz_question_#{question['id']}", :group_id => group["id"]} %>
 <% end %>
 <div class="group_bottom" style="<%= "display: none;" unless group %>" id="<%= "group_bottom_template" unless group %>">
   &nbsp;

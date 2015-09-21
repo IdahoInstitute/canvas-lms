@@ -19,7 +19,8 @@
 class ContextModule < ActiveRecord::Base
   include Workflow
   include SearchTermHelper
-  attr_accessible :context, :name, :unlock_at, :require_sequential_progress, :completion_requirements, :prerequisites, :publish_final_grade
+  attr_accessible :context, :name, :unlock_at, :require_sequential_progress,
+                  :completion_requirements, :prerequisites, :publish_final_grade, :requirement_count
   belongs_to :context, :polymorphic => true
   validates_inclusion_of :context_type, :allow_nil => true, :in => ['Course']
   has_many :context_module_progressions, :dependent => :destroy
@@ -27,35 +28,95 @@ class ContextModule < ActiveRecord::Base
   acts_as_list scope: { context: self, workflow_state: ['active', 'unpublished'] }
 
   EXPORTABLE_ATTRIBUTES = [
-    :id, :context_id, :context_type, :name, :position, :prerequisites, :completion_requirements, :created_at, :updated_at, :workflow_state, :deleted_at,
-    :unlock_at, :start_at, :end_at, :require_sequential_progress, :cloned_item_id, :completion_events
-  ]
+    :id, :context_id, :context_type, :name, :position, :prerequisites, :completion_requirements, :created_at,
+    :updated_at, :workflow_state, :deleted_at, :unlock_at, :start_at, :end_at, :require_sequential_progress,
+    :cloned_item_id, :completion_events, :requirement_count
+  ].freeze
 
-  EXPORTABLE_ASSOCIATIONS = [:context, :context_module_prograssions, :content_tags]
+  EXPORTABLE_ASSOCIATIONS = [:context, :context_module_progressions, :content_tags].freeze
 
   serialize :prerequisites
   serialize :completion_requirements
   before_save :infer_position
   before_save :validate_prerequisites
   before_save :confirm_valid_requirements
+
   after_save :touch_context
   after_save :invalidate_progressions
+  after_save :relock_warning_check
   validates_presence_of :workflow_state, :context_id, :context_type
+
+  def relock_warning_check
+    # if the course is already active and we're adding more stringent requirements
+    # then we're going to give the user an option to re-lock students out of the modules
+    # otherwise they will be able to continue as before
+    @relock_warning = false
+    return if self.new_record?
+
+    if self.context.available? && self.active?
+      if self.workflow_state_changed? && self.workflow_state_was == "unpublished"
+        # should trigger when publishing a prerequisite for an already active module
+        @relock_warning = true if self.context.context_modules.active.any?{|mod| self.is_prerequisite_for?(mod)}
+      end
+      if self.completion_requirements_changed?
+        # removing a requirement shouldn't trigger
+        @relock_warning = true if (self.completion_requirements.to_a - self.completion_requirements_was.to_a).present?
+      end
+      if self.prerequisites_changed?
+        # ditto with removing a prerequisite
+        @relock_warning = true if (self.prerequisites.to_a - self.prerequisites_was.to_a).present?
+      end
+      if self.unlock_at_changed?
+        # adding a unlock_at date should trigger
+        @relock_warning = true if self.unlock_at.present? && self.unlock_at_was.blank?
+      end
+    end
+  end
+
+  def relock_warning?
+    @relock_warning
+  end
+
+  def relock_progressions(relocked_modules=[])
+    return if relocked_modules.include?(self)
+    connection.after_transaction_commit do
+      relocked_modules << self
+      self.context_module_progressions.update_all(:workflow_state => "locked")
+      self.invalidate_progressions
+
+      self.context.context_modules.each do |mod|
+        mod.relock_progressions(relocked_modules) if self.is_prerequisite_for?(mod)
+      end
+    end
+  end
 
   def invalidate_progressions
     connection.after_transaction_commit do
-      context_module_progressions.update_all(current: false)
-      send_later_if_production(:evaluate_all_progressions)
+      if context_module_progressions.where(current: true).update_all(current: false) > 0
+        # don't queue a job unless necessary
+        send_later_if_production_enqueue_args(:evaluate_all_progressions, {:strand => "module_reeval_#{self.global_context_id}"})
+      end
     end
   end
-  private :invalidate_progressions
 
   def evaluate_all_progressions
     current_column = 'context_module_progressions.current'
-    current_scope = context_module_progressions.where("#{current_column} IS NULL OR #{current_column} = ?", false)
-    current_scope.find_each(batch_size: 100) do |progression|
-      progression.evaluate!
+    current_scope = context_module_progressions.where("#{current_column} IS NULL OR #{current_column} = ?", false).includes(:user)
+
+    current_scope.find_in_batches(batch_size: 100) do |progressions|
+      cache_visibilities_for_students(progressions.map(&:user_id)) if differentiated_assignments_enabled?
+
+      progressions.each do |progression|
+        progression.context_module = self
+        progression.evaluate!
+      end
+
+      clear_cached_visibilities if differentiated_assignments_enabled?
     end
+  end
+
+  def is_prerequisite_for?(mod)
+    (mod.prerequisites || []).any? {|prereq| prereq[:type] == 'context_module' && prereq[:id] == self.id }
   end
 
   def self.module_positions(context)
@@ -118,7 +179,7 @@ class ContextModule < ActiveRecord::Base
   end
 
   def restore
-    self.workflow_state = context.feature_enabled?(:draft_state) ? 'unpublished' : 'active'
+    self.workflow_state = 'unpublished'
     self.save
   end
 
@@ -147,22 +208,28 @@ class ContextModule < ActiveRecord::Base
   alias_method :published?, :active?
 
   def publish_items!
-    self.content_tags.select{|t| t.unpublished?}.each do |tag|
-      tag.publish
+    self.content_tags.each do |tag|
+      tag.publish if tag.unpublished?
       tag.update_asset_workflow_state!
     end
   end
 
   set_policy do
     given {|user, session| self.context.grants_right?(user, session, :manage_content) }
-    can :read and can :create and can :update and can :delete
+    can :read and can :create and can :update and can :delete and can :read_as_admin
 
-    given {|user, session| self.context.grants_right?(user, session, :read) }
+    given {|user, session| self.context.grants_right?(user, session, :read_as_admin) }
+    can :read_as_admin
+
+    given {|user, session| self.context.grants_right?(user, session, :view_unpublished_items) }
+    can :view_unpublished_items
+
+    given {|user, session| self.context.grants_right?(user, session, :read) && self.active? }
     can :read
   end
 
   def locked_for?(user, opts={})
-    return false if self.grants_right?(user, :update)
+    return false if self.grants_right?(user, :read_as_admin)
     available = self.available_for?(user, opts)
     return {:asset_string => self.asset_string, :context_module => self.attributes} unless available
     return {:asset_string => self.asset_string, :context_module => self.attributes, :unlock_at => self.unlock_at} if self.to_be_unlocked
@@ -171,7 +238,7 @@ class ContextModule < ActiveRecord::Base
 
   def available_for?(user, opts={})
     return true if self.active? && !self.to_be_unlocked && self.prerequisites.blank? && !self.require_sequential_progress
-    if self.grants_right?(user, :update)
+    if self.grants_right?(user, :read_as_admin)
       return true
     elsif !self.active?
       return false
@@ -271,8 +338,8 @@ class ContextModule < ActiveRecord::Base
 
     tags = self.content_tags.not_deleted.index_by(&:id)
     requirements.select do |req|
-      if req[:id] && tag = tags[req[:id]]
-        if %w(must_view must_contribute).include?(req[:type])
+      if req[:id] && (tag = tags[req[:id]])
+        if %w(must_view must_mark_done must_contribute).include?(req[:type])
           true
         elsif %w(must_submit min_score max_score).include?(req[:type])
           true if tag.scoreable?
@@ -287,64 +354,93 @@ class ContextModule < ActiveRecord::Base
   end
 
   def content_tags_visible_to(user, opts={})
-    opts[:tags_loaded] = self.content_tags.loaded?
-    tags = if opts[:tags_loaded]
-      if self.grants_right?(user, :update)
-        self.content_tags.select{|tag| tag.workflow_state != 'deleted'}
-      else
-        self.content_tags.select{|tag| tag.workflow_state == 'active'}
-      end
-    else
-      if self.grants_right?(user, :update)
-        self.content_tags.not_deleted
-      else
-        self.content_tags.active
-      end
-    end
+    @content_tags_visible_to ||= {}
+    @content_tags_visible_to[user.try(:id)] ||= begin
+      is_teacher = opts[:is_teacher] != false && self.grants_right?(user, :read_as_admin)
+      tags = is_teacher ? cached_not_deleted_tags : cached_active_tags
 
-    if !self.grants_right?(user, :update) && self.context.feature_enabled?(:differentiated_assignments) && user
-      tags = filter_tags_for_da(tags, user, opts)
-    end
+      if !is_teacher && differentiated_assignments_enabled? && user
+        opts[:is_teacher] = false
+        tags = filter_tags_for_da(tags, user, opts)
+      end
 
-    tags
+      # always return an array now because filter_tags_for_da *might* return one
+      tags.to_a
+    end
+  end
+
+  def visibility_for_user(user)
+    opts = {}
+    opts[:can_read] = self.context.grants_right?(user, :read)
+    if opts[:can_read]
+      opts[:can_read_as_admin] = self.context.grants_right?(user, :read_as_admin)
+      opts[:differentiated_assignments] = !opts[:can_read_as_admin] && self.differentiated_assignments_enabled?
+    end
+    opts
   end
 
   def filter_tags_for_da(tags, user, opts={})
-
-    scope_filter = Proc.new{|tags, user_ids, course_id, opts|
-      tags.visible_to_students_with_da_enabled(user_ids)
-    }
-
-    array_filter = Proc.new{|tags, user_ids, course_id, opts|
-      visible_assignments = opts[:assignment_visibilities] || AssignmentStudentVisibility.visible_assignment_ids_for_user(user_ids, course_id)
-      visible_discussions = opts[:discussion_visibilities] || DiscussionTopic.where(context_id: course_id).visible_to_students_with_da_enabled(user_ids).pluck(:id)
-      # TODO: uncomment once quiz visibilities sql view makes it into master
-      # visible_quizzes = opts[:quiz_visibilities] || QuizStudentVisibility.visible_assignment_ids_for_user(user_ids, course_id)
+    filter = Proc.new{|tags, user_ids, course_id, opts|
+      visible_assignments = opts[:assignment_visibilities] || assignment_visibilities_for_users(user_ids)
+      visible_discussions = opts[:discussion_visibilities] || discussion_visibilities_for_users(user_ids)
+      visible_quizzes = opts[:quiz_visibilities] || quiz_visibilities_for_users(user_ids)
       tags.select{|tag|
         case tag.content_type;
         when 'Assignment'; visible_assignments.include?(tag.content_id);
         when 'DiscussionTopic'; visible_discussions.include?(tag.content_id);
-        # when 'Quizzes::Quiz'; visible_quizzes.include?(tag.content_id);
+        when *Quizzes::Quiz.class_names; visible_quizzes.include?(tag.content_id);
         else; true; end
       }
     }
 
-    filter = opts[:tags_loaded] ? array_filter : scope_filter
-
-    tags = AssignmentStudentVisibility.filter_for_differentiated_assignments(tags, user, self.context, opts) do |tags, user_ids|
+    tags = DifferentiableAssignment.filter(tags, user, self.context, opts) do |tags, user_ids|
       filter.call(tags, user_ids, self.context_id, opts)
     end
 
     tags
   end
 
+  def reload
+    clear_cached_lookups
+    super
+  end
+
+  def clear_cached_lookups
+    @cached_active_tags = nil
+    @cached_not_deleted_tags = nil
+    @content_tags_visible_to = nil
+  end
+
+  def cached_active_tags
+    @cached_active_tags ||= begin
+      if self.content_tags.loaded?
+        # don't reload the preloaded content
+        self.content_tags.select{|tag| tag.active?}
+      else
+        self.content_tags.active.to_a
+      end
+    end
+  end
+
+  def cached_not_deleted_tags
+    @cached_not_deleted_tags ||= begin
+      if self.content_tags.loaded?
+        # don't reload the preloaded content
+        self.content_tags.select{|tag| !tag.deleted?}
+      else
+        self.content_tags.not_deleted.to_a
+      end
+    end
+  end
+
   def add_item(params, added_item=nil, opts={})
     params[:type] = params[:type].underscore if params[:type]
     position = opts[:position] || (self.content_tags.not_deleted.maximum(:position) || 0) + 1
+    position = [position, params[:position].to_i].max if params[:position]
     if params[:type] == "wiki_page" || params[:type] == "page"
       item = opts[:wiki_page] || self.context.wiki.wiki_pages.where(id: params[:id]).first
     elsif params[:type] == "attachment" || params[:type] == "file"
-      item = opts[:attachment] || self.context.attachments.active.find_by_id(params[:id])
+      item = opts[:attachment] || self.context.attachments.not_deleted.find_by_id(params[:id])
     elsif params[:type] == "assignment"
       item = opts[:assignment] || self.context.assignments.active.where(id: params[:id]).first
     elsif params[:type] == "discussion_topic" || params[:type] == "discussion"
@@ -369,19 +465,20 @@ class ContextModule < ActiveRecord::Base
       added_item.content_type = 'ExternalUrl'
       added_item.context_module_id = self.id
       added_item.indent = params[:indent] || 0
-      added_item.workflow_state = (self.context.feature_enabled?(:draft_state) ? 'unpublished' : workflow_state)
+      added_item.workflow_state = 'unpublished'
       added_item.save
       added_item
-    elsif params[:type] == 'context_external_tool' || params[:type] == 'external_tool'
+    elsif params[:type] == 'context_external_tool' || params[:type] == 'external_tool' || params[:type] == 'lti/message_handler'
       title = params[:title]
       added_item ||= self.content_tags.build(:context => self.context)
-      tool = ContextExternalTool.find_external_tool(params[:url], self.context, params[:id].to_i)
-      unless tool
-        tool = ContextExternalTool.new
-        tool.id = 0
-      end
+
+      content = if params[:type] == 'lti/message_handler'
+                  Lti::MessageHandler.for_context(context).where(id: params[:id]).first
+                else
+                  ContextExternalTool.find_external_tool(params[:url], self.context, params[:id].to_i) || ContextExternalTool.new.tap { |tool| tool.id = 0 }
+                end
       added_item.attributes = {
-        :content => tool,
+        content: content,
         :url => params[:url],
         :new_tab => params[:new_tab],
         :tag_type => 'context_module',
@@ -391,7 +488,7 @@ class ContextModule < ActiveRecord::Base
       }
       added_item.context_module_id = self.id
       added_item.indent = params[:indent] || 0
-      added_item.workflow_state = (self.context.feature_enabled?(:draft_state) ? 'unpublished' : workflow_state)
+      added_item.workflow_state = 'unpublished'
       added_item.save
       added_item
     elsif params[:type] == 'context_module_sub_header' || params[:type] == 'sub_header'
@@ -407,7 +504,7 @@ class ContextModule < ActiveRecord::Base
       added_item.content_type = 'ContextModuleSubHeader'
       added_item.context_module_id = self.id
       added_item.indent = params[:indent] || 0
-      added_item.workflow_state = (self.context.feature_enabled?(:draft_state) ? 'unpublished' : 'active')
+      added_item.workflow_state = 'unpublished'
       added_item.save
       added_item
     else
@@ -431,26 +528,12 @@ class ContextModule < ActiveRecord::Base
 
   def update_for(user, action, tag, points=nil)
     retry_count = 0
-    begin
-      return nil unless self.context.users.include?(user)
-      return nil unless ContextModuleProgression.prerequisites_satisfied?(user, self)
-      return nil unless progression = self.find_or_create_progression(user)
+    return nil unless self.context.users.include?(user)
+    return nil unless ContextModuleProgression.prerequisites_satisfied?(user, self)
+    return nil unless progression = self.find_or_create_progression(user)
 
-      progression.requirements_met ||= []
-      if progression.update_requirement_met(action, tag, points)
-        # not sure if this save is necessary
-        # leaving it for now as it saves the default requirements_met (set above)
-        progression.save!
-        progression.send_later_if_production(:evaluate)
-      end
-
-      progression
-
-    rescue ActiveRecord::StaleObjectError
-      raise if retry_count > 10
-      retry_count += 1
-      retry
-    end
+    progression.update_requirement_met!(action, tag, points)
+    progression
   end
 
   def completion_requirement_for(action, tag)
@@ -460,6 +543,8 @@ class ContextModule < ActiveRecord::Base
       case requirement[:type]
       when 'must_view'
         action == :read || action == :contributed
+      when 'must_mark_done'
+        action == :done
       when 'must_contribute'
         action == :contributed
       when 'must_submit'
@@ -478,6 +563,8 @@ class ContextModule < ActiveRecord::Base
     case req[:type]
     when 'must_view'
       t('requirements.must_view', "must view the page")
+    when 'must_mark_done'
+      t("must mark as done")
     when 'must_contribute'
       t('requirements.must_contribute', "must contribute to the page")
     when 'must_submit'
@@ -596,5 +683,43 @@ class ContextModule < ActiveRecord::Base
       callbacks << lambda { |user| context.publish_final_grades(user, user.id) }
     end
     callbacks
+  end
+
+  def differentiated_assignments_enabled?
+    @differentiated_assignments_enabled ||= context.feature_enabled?(:differentiated_assignments)
+  end
+
+  def clear_cached_visibilities
+    @content_tags_visible_to = nil
+    @assignment_visibilities_by_user = nil
+    @discussion_visibilities_by_user = nil
+    @quiz_visibilities_by_user = nil
+    @differentiated_assignments_enabled = nil
+  end
+
+  # call this method before filtering content tags for many users
+  # this will avoid an N+1 query when finding individual visibilities
+  def cache_visibilities_for_students(student_ids)
+    raise "don't call this method without differentiated_assignments enabled" unless differentiated_assignments_enabled?
+    @assignment_visibilities_by_user ||= AssignmentStudentVisibility.visible_assignment_ids_in_course_by_user(user_id: student_ids, course_id: [context.id])
+    @discussion_visibilities_by_user ||= DiscussionTopic.visible_ids_by_user(user_id: student_ids, course_id: [context.id])
+    @quiz_visibilities_by_user ||= Quizzes::QuizStudentVisibility.visible_quiz_ids_in_course_by_user(user_id: student_ids, course_id: [context.id])
+  end
+
+  # *_visibilities_for_users are preferably used with cache_visibilities_for_students
+  # when called in batches
+  def assignment_visibilities_for_users(user_ids)
+    assignment_visibilities_by_user = @assignment_visibilities_by_user || AssignmentStudentVisibility.visible_assignment_ids_in_course_by_user(user_id: user_ids, course_id: [context.id])
+    user_ids.flat_map{|id| assignment_visibilities_by_user[id]}
+  end
+
+  def discussion_visibilities_for_users(user_ids)
+    discussion_visibilities_by_user = @discussion_visibilities_by_user || DiscussionTopic.visible_ids_by_user(user_id: user_ids, course_id: [context.id])
+    user_ids.flat_map{|id| discussion_visibilities_by_user[id]}
+  end
+
+  def quiz_visibilities_for_users(user_ids)
+    quiz_visibilities_by_user = @quiz_visibilities_by_user || Quizzes::QuizStudentVisibility.visible_quiz_ids_in_course_by_user(user_id: user_ids, course_id: [context.id])
+    user_ids.flat_map{|id| quiz_visibilities_by_user[id]}
   end
 end

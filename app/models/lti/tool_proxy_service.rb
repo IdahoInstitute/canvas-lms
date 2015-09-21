@@ -15,18 +15,37 @@
 # You should have received a copy of the GNU Affero General Public License along
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
+require 'ims/lti'
+
 module Lti
   class ToolProxyService
+
+    class InvalidToolProxyError < RuntimeError
+
+      def initialize(message = nil, json = {})
+        super(message)
+        @message = message
+        @json = json
+      end
+
+      def to_json
+        @json[:error] = @message if @message
+        @json.to_json
+      end
+
+    end
 
     def process_tool_proxy_json(json, context, guid)
       tp = IMS::LTI::Models::ToolProxy.new.from_json(json)
       tp.tool_proxy_guid = guid
+      validate_proxy!(tp)
       tool_proxy = nil
       ToolProxy.transaction do
         product_family = create_product_family(tp, context.root_account)
         tool_proxy = create_tool_proxy(tp, context, product_family)
         process_resources(tp, tool_proxy)
         create_proxy_binding(tool_proxy, context)
+        create_tool_settings(tp, tool_proxy)
       end
       tool_proxy
     end
@@ -40,6 +59,8 @@ module Lti
       tool_proxy.shared_secret = tp.security_contract.shared_secret
       tool_proxy.product_version = tp.tool_profile.product_instance.product_info.product_version
       tool_proxy.lti_version = tp.tool_profile.lti_version
+      tool_proxy.name = tp.tool_profile.product_instance.product_info.default_name
+      tool_proxy.description = tp.tool_profile.product_instance.product_info.default_description
       tool_proxy.context = context
       tool_proxy.workflow_state = 'disabled'
       tool_proxy.raw_data = tp.as_json
@@ -75,6 +96,8 @@ module Lti
       message_handler.parameters = create_json(mh.parameter.as_json)
       message_handler.resource_handler = resource
       message_handler.save!
+      create_placements(mh, message_handler)
+      message_handler.save!
       message_handler
     end
 
@@ -100,15 +123,16 @@ module Lti
 
     def process_resources(tp, tool_proxy)
       resource_handlers = tp.tool_profile.resource_handlers
-      if tp.tool_profile.messages
-        rh =  IMS::LTI::Models::ResourceHandler.new.from_json(
-            {
-                resource_type: {code: 'instructure.com:default'},
-                resource_name: {default_value: 'Default'}
-            }.to_json
+      if tp.tool_profile.messages.present?
+        product_name = tp.tool_profile.product_instance.product_info.product_name
+        r = IMS::LTI::Models::ResourceHandler.new.from_json(
+          {
+            resource_type: {code: 'instructure.com:default'},
+            resource_name: product_name
+          }.to_json
         )
-        rh.message = tp.tool_profile.messages
-        resource_handlers << rh
+        r.message = tp.tool_profile.messages
+        resource_handlers << r
       end
 
       resource_handlers.each do |rh|
@@ -116,14 +140,75 @@ module Lti
         rh.messages.each do |mh|
           create_message_handler(mh, tp.tool_profile.base_message_url, resource_handler)
         end
-
       end
     end
 
-    private
+    def create_placements(mh, message_handler)
+      unless (mh.enabled_capabilities & ResourcePlacement::PLACEMENT_LOOKUP.keys).blank?
+        mh.enabled_capability.each do |p|
+          if ResourcePlacement::PLACEMENT_LOOKUP[p]
+            message_handler.placements.create(placement: ResourcePlacement::PLACEMENT_LOOKUP[p])
+          end
+        end
+      else
+        ResourcePlacement::DEFAULT_PLACEMENTS.each do |p|
+          message_handler.placements.create(placement: p)
+        end
+      end
+    end
+
+    def create_tool_settings(tp, tool_proxy)
+      ToolSetting.create!(tool_proxy:tool_proxy, custom: tp.custom) if tp.custom.present?
+    end
 
     def create_json(obj)
       obj.kind_of?(Array) ? obj.map(&:as_json) : obj.as_json
+    end
+
+    def validate_proxy!(tp)
+      tp_errors = [validate_services(tp), validate_capabilities(tp), validate_security_contract(tp)].compact
+      unless tp_errors.flatten.compact.empty?
+        json = {}
+        messages = []
+        tp_errors.each do |e|
+          messages << e[0]
+          json.merge! e[1]
+        end
+        last_message = messages.pop if messages.size > 1
+        message = "Invalid #{messages.join(', ')}"
+        message + " and #{last_message}" if last_message
+        raise InvalidToolProxyError.new(message, json)
+      end
+
+    end
+
+    def validate_services(tp)
+      allowed_services = ToolConsumerProfileCreator::SERVICES.each_with_object({}) { |s, h| h[s[:id]] = s[:action] }
+      invalid_services = []
+      tp.security_contract.services.each do |service|
+        id = service.service.split('#').last
+        invalid_actions = service.actions - (allowed_services[id] || [])
+        invalid_services << {id: id, actions: invalid_actions} if invalid_actions.present?
+      end
+      ['Services', invalid_services: invalid_services] unless invalid_services.empty?
+    end
+
+    def validate_capabilities(tp)
+      requested_caps = []
+      tp.tool_profile.resource_handlers.each do |rh|
+        rh.messages.each do |mh|
+          requested_caps.push(*mh.enabled_capabilities)
+          mh.parameters.each { |p| requested_caps << p.variable unless p.fixed? }
+        end
+      end
+      invalid_capabilites = requested_caps - ToolConsumerProfileCreator::CAPABILITIES
+      ['Capabilities', invalid_capabilities: invalid_capabilites] unless invalid_capabilites.empty?
+    end
+
+    def validate_security_contract(tp)
+      invalid_fields = []
+      invalid_fields << :shared_secret if tp.security_contract.shared_secret.blank?
+      ['SecurityContract', invalid_security_contract: invalid_fields] unless invalid_fields.empty?
     end
 
   end

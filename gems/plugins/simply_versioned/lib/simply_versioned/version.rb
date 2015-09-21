@@ -15,16 +15,25 @@
 class Version < ActiveRecord::Base #:nodoc:
   belongs_to :versionable, :polymorphic => true
 
+  validates_presence_of :versionable_id, :versionable_type
+
   before_create :initialize_number
+
+  attr_accessible :yaml, :versionable
 
   # Return an instance of the versioned ActiveRecord model with the attribute
   # values of this version.
   def model
     obj = versionable_type.constantize.new
     YAML::load( self.yaml ).each do |var_name,var_value|
+      unless CANVAS_RAILS3
+        if (coder = obj.class.serialized_attributes[var_name]) && coder.is_a?(ActiveRecord::Coders::Utf8SafeYAMLColumn)
+          Utf8Cleaner.recursively_strip_invalid_utf8!(var_value, true)
+        end
+      end
 
       # INSTRUCTURE:  added if... so that if a column is removed in a migration after this was versioned it doesen't die with NoMethodError: undefined method `some_column_name=' for ...
-       obj.write_attribute(var_name, var_value) if obj.class.columns_hash[var_name]
+      obj.write_attribute(var_name, var_value) if obj.class.columns_hash[var_name]
     end
     obj.instance_variable_set(:@new_record, false)
     obj.simply_versioned_options[:on_load].try(:call, obj, self)
@@ -51,20 +60,17 @@ class Version < ActiveRecord::Base #:nodoc:
     versionable.versions.previous_version( self.number )
   end
 
-  alias_method :method_missing_for_real, :method_missing
   # If the model has new columns that it didn't have before just return nil
   def method_missing(method_name, *args, &block)
-    if read_attribute(:versionable_type).constantize.column_names.member? method_name.to_s
+    if read_attribute(:versionable_type) && read_attribute(:versionable_type).constantize.column_names.member?(method_name.to_s)
       return nil
     else
-      super(method_name, *args, &block)
-      # raise NoMethodError.new("undefined method '#{method_name}' for #{inspect}:#{self.class}")
+      super
     end
   end
 
   protected
   def initialize_number
-    return false unless versionable
     self.number = (versionable.versions.maximum( :number ) || 0) + 1
   end
 

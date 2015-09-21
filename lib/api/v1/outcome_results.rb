@@ -33,13 +33,16 @@ module Api::V1::OutcomeResults
   end
 
   def outcome_result_json(result)
-    hash = api_json(result, @current_user, session, only: %w(id score))
+    hash = api_json(result, @current_user, session, {
+      methods: :submitted_or_assessed_at,
+      only: %w(id score)
+    })
     hash[:links] = {
       user: result.user.id.to_s,
       learning_outcome: result.learning_outcome_id.to_s,
       alignment: result.alignment.content.asset_string
     }
-    Api.recursively_stringify_json_ids(hash)
+    hash
   end
 
   # Public: Serializes the rollups produced by Outcomes::ResultAnalytics.
@@ -57,10 +60,14 @@ module Api::V1::OutcomeResults
   #
   # Returns a Hash containing serialized outcomes.
   def outcome_results_include_outcomes_json(outcomes)
+    ActiveRecord::Associations::Preloader.new(outcomes, [:context, :alignments]).run
+    assessed_outcomes = LearningOutcomeResult.uniq
+      .where(learning_outcome_id: outcomes.map(&:id))
+      .pluck(:learning_outcome_id)
     outcomes.map do |o|
-      hash = outcome_json(o, @current_user, session)
+      hash = outcome_json(o, @current_user, session, assessed_outcomes: assessed_outcomes)
       hash.merge!(alignments: o.alignments.map(&:content_asset_string))
-      Api.recursively_stringify_json_ids(hash)
+      hash
     end
   end
 
@@ -68,14 +75,14 @@ module Api::V1::OutcomeResults
   #
   # Returns a Hash containing serialized outcome groups.
   def outcome_results_include_outcome_groups_json(outcome_groups)
-    outcome_groups.map { |g| Api.recursively_stringify_json_ids(outcome_group_json(g, @current_user, session)) }
+    outcome_groups.map { |g| outcome_group_json(g, @current_user, session) }
   end
 
   # Public: Serializes outcome links in a hash that can be added to the linked hash.
   #
   # Returns a Hash containing serialized outcome links.
   def outcome_results_include_outcome_links_json(outcome_links)
-    outcome_links.map { |l| Api.recursively_stringify_json_ids(outcome_link_json(l, @current_user, session)) }
+    ols_json = outcome_links_json(outcome_links, @current_user, session)
   end
 
   # Public: Returns an Array of serialized Course objects for linked hash.
@@ -158,11 +165,11 @@ module Api::V1::OutcomeResults
                          ->(user) { enrollments.select{|e| e.user_id == user.id}.map(&:course_section_id) }
                        end
 
-    serialized_rollup_pairs.map do |rollup, serialized_rollup|
+    serialized_rollup_pairs.flat_map do |rollup, serialized_rollup|
       section_ids_func.call(rollup.context).map do |section_id|
         serialized_rollup.deep_merge(links: {section: section_id.to_s})
       end
-    end.flatten(1)
+    end
   end
 
   # Internal: Returns an Array of serialized rollup scores
@@ -174,6 +181,8 @@ module Api::V1::OutcomeResults
   def serialize_rollup_score(score)
     {
       score: score.score,
+      title: score.title,
+      submitted_at: score.submitted_at,
       count: score.count,
       links: {outcome: score.outcome.id.to_s},
     }

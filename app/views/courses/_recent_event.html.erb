@@ -1,12 +1,13 @@
 <%
-  show_context ||= false; upcoming ||= false
+  recent_event ||= nil
+  show_context ||= false
   is_assignment = recent_event.is_a?(Assignment)
   is_calendar_event = recent_event.is_a?(CalendarEvent)
   if is_assignment
     if @current_user_submissions
       submission = @current_user_submissions.detect { |s| s.assignment_id == recent_event.id }
     elsif @current_user
-      submission = @current_user.submissions.select([:id, :assignment_id, :score, :workflow_state]).where(:assignment_id => recent_event).first
+      submission = @current_user.submissions.select([:id, :assignment_id, :score, :workflow_state, :updated_at]).where(:assignment_id => recent_event).first
     end
 
     if is_assignment

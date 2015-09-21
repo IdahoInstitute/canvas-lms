@@ -12,7 +12,7 @@ the same course.  The description returned by the Get Assignment API might look
 like this:
 
     !!!javascript
-    <a href="http://canvas.example.com/courses/123/wiki/a-wiki-page"
+    <a href="http://canvas.example.com/courses/123/pages/a-wiki-page"
        data-api-endpoint="http://canvas.example.com/api/v1/courses/123/pages/a-wiki-page"
        data-api-returntype="Page">More information here</a>
 
@@ -24,6 +24,7 @@ The currently supported `data-api-returntype` values are:
 * `File`
 * `Folder`
 * `Quiz`
+* `Module`
 * `SessionlessLaunchUrl`
 
 If the API returns a list of objects instead of a single object, the `data-api-returntype`

@@ -237,8 +237,8 @@ define ['compiled/grade_calculator', 'underscore'], (GradeCalculator, _) ->
     @setup_grades @group4, [[10, 0], [5, 0]]
 
     result = GradeCalculator.calculate @submissions, groups, 'percent'
-    assertGrade result, 'current', 76.7, 100
-    assertGrade result, 'final', 76.7, 100
+    assertGrade result, 'current', 76.67, 100
+    assertGrade result, 'final', 76.67, 100
 
     result = GradeCalculator.calculate @submissions, groups, 'equal'
     assertGrade result, 'current', 29, 20
@@ -259,3 +259,21 @@ define ['compiled/grade_calculator', 'underscore'], (GradeCalculator, _) ->
     result = GradeCalculator.calculate @submissions, [@group]
     dropped2 = _(result.group_sums[0].current.submissions).find (s) -> s.drop
     equal firstDroppedAssignment, dropped2.submission.assignment_id
+
+  test "with Differentiated Assignments filtering", ->
+    @submissions.slice(1).forEach (s) ->
+      s["hidden"] = true
+
+    result = GradeCalculator.create_group_sum @group, @submissions, true
+    equal result.submissions.length, 1
+
+  test "excused assignments", ->
+    @submissions = []
+    @group.rules = {}
+    @setup_grades @group, [[10, 10], [0, 90]]
+    result = GradeCalculator.calculate @submissions, [@group]
+    assertGrade result, 'final', 10, 100
+
+    @submissions[1].excused = 1
+    result = GradeCalculator.calculate @submissions, [@group]
+    assertGrade result, 'final', 10, 10

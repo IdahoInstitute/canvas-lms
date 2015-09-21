@@ -15,6 +15,7 @@ define [
   'compiled/views/assignments/AssignmentKeyBindingsMixin'
   'jqueryui/tooltip'
   'compiled/behaviors/tooltip'
+  'compiled/jquery.rails_flash_notifications'
 ], (I18n, Backbone, $, _, PublishIconView, DateDueColumnView, DateAvailableColumnView, CreateAssignmentView, MoveDialogView, preventDefault, template, scoreTemplate, round, AssignmentKeyBindingsMixin) ->
 
   class AssignmentListItemView extends Backbone.View
@@ -40,7 +41,7 @@ define [
 
     messages:
       confirm: I18n.t('confirms.delete_assignment', 'Are you sure you want to delete this assignment?')
-      ag_move_label: I18n.beforeLabel 'assignment_group_move_label', 'Assignment Group'
+      ag_move_label: I18n.beforeLabel I18n.t('labels.assignment_group_move_label', 'Assignment Group')
 
     initialize: ->
       super
@@ -55,7 +56,7 @@ define [
         @model.on('change:published', @updatePublishState)
 
         # re-render for attributes we are showing
-        attrs = ["name", "points_possible", "due_at", "lock_at", "unlock_at", "modules"]
+        attrs = ["name", "points_possible", "due_at", "lock_at", "unlock_at", "modules", "published"]
         observe = _.map(attrs, (attr) -> "change:#{attr}").join(" ")
         @model.on(observe, @render)
       @model.on 'change:submission', @updateScore
@@ -109,7 +110,7 @@ define [
         @moveAssignmentView.hide()
         @moveAssignmentView.setTrigger @$moveAssignmentButton
 
-      @updateScore() unless (@canManage() || !@userIsStudent())
+      @updateScore() if @canReadGrades()
 
     toggleHidden: (model, hidden) =>
       @$el.toggleClass('hidden', hidden)
@@ -150,7 +151,7 @@ define [
       else if @model.isDiscussionTopic()
         data.menu_tools = ENV.discussion_topic_menu_tools
         _.each data.menu_tools, (tool) =>
-          tool.url = tool.base_url + "&discussion_topics[]=#{@model.get("discussion_topic_id")}"
+          tool.url = tool.base_url + "&discussion_topics[]=#{@model.get("discussion_topic")?.id}"
       else
         data.menu_tools = ENV.assignment_menu_tools
         _.each data.menu_tools, (tool) =>
@@ -182,7 +183,8 @@ define [
         @focusOnGroupByID(id)
 
     delete: ->
-      @model.destroy()
+      @model.destroy success: =>
+        $.screenReaderFlashMessage(I18n.t('Assignment was deleted'))
       @$el.remove()
 
     canManage: ->
@@ -231,7 +233,6 @@ define [
 
       json.submission.gradingType = json.gradingType if json.submission?
 
-
       if json.gradingType is 'not_graded'
         json.hideGrade = true
       json
@@ -241,8 +242,8 @@ define [
       json = @_setJSONForGrade(json) unless @canManage()
       @$('.js-score').html scoreTemplate(json)
 
-    userIsStudent: ->
-      _.include(ENV.current_user_roles, "student")
+    canReadGrades: ->
+      ENV.PERMISSIONS.read_grades
 
     goToNextItem: =>
       if @nextAssignmentInGroup()?

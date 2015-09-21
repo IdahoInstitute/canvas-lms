@@ -1,4 +1,16 @@
 Rails.application.config.to_prepare do
+  Switchman.cache = -> { MultiCache.cache }
+
+  module Canvas
+    module Shard
+      def clear_cache
+        connection.after_transaction_commit { super }
+      end
+    end
+  end
+
+  Switchman::Shard.prepend(Canvas::Shard)
+
   Switchman::Shard.class_eval do
     class << self
       alias :birth :default unless instance_methods.include?(:birth)
@@ -85,7 +97,27 @@ Rails.application.config.to_prepare do
 
     def delayed_jobs_shard
       shard = Shard.lookup(self.delayed_jobs_shard_id) if self.read_attribute(:delayed_jobs_shard_id)
-      shard || self.database_server.delayed_jobs_shard(self)
+      shard || self.database_server.try(:delayed_jobs_shard, self)
+    end
+
+    delegate :in_current_region?, to: :database_server
+
+    scope :in_region, ->(region) do
+      servers = DatabaseServer.all.select { |db| db.in_region?(region) }.map(&:id)
+      if servers.include?(Shard.default.database_server.id)
+        where("database_server_id IN (?) OR database_server_id IS NULL", servers)
+      else
+        where(database_server_id: servers)
+      end
+    end
+
+    scope :in_current_region, -> do
+      @current_region_scope ||=
+        if !ApplicationController.region || DatabaseServer.all.all? { |db| !db.config[:region] }
+          scoped
+        else
+          in_region(ApplicationController.region)
+        end
     end
   end
 
@@ -98,6 +130,34 @@ Rails.application.config.to_prepare do
       dj_shard ||= shard if shard.default?
       dj_shard ||= Shard.default.delayed_jobs_shard
       dj_shard
+    end
+
+    def self.regions
+      @regions ||= all.map { |db| db.config[:region] }.compact.uniq.sort
+    end
+
+    def in_region?(region)
+      !config[:region] || config[:region] == region
+    end
+
+    def in_current_region?
+      unless instance_variable_defined?(:@in_current_region)
+        @in_current_region = !config[:region] || !ApplicationController.region || config[:region] == ApplicationController.region
+      end
+      @in_current_region
+    end
+
+    def self.send_in_each_region(klass, method, enqueue_args = {}, *args)
+      klass.send(method, *args)
+      regions = Set.new
+      regions << Shard.current.database_server.config[:region]
+      all.each do |db|
+        next if regions.include?(db.config[:region]) || !db.config[:region]
+        next if db.shards.empty?
+        db.shards.first.activate do
+          klass.send_later_enqueue_args(method, enqueue_args, *args)
+        end
+      end
     end
   end
 
@@ -118,6 +178,14 @@ Rails.application.config.to_prepare do
     def delayed_jobs_shard
       self
     end
+
+    def in_region?(region)
+      true
+    end
+
+    def in_current_region?
+      true
+    end
   end
 
   Delayed::Backend::ActiveRecord::Job.class_eval do
@@ -125,4 +193,8 @@ Rails.application.config.to_prepare do
   end
 
   Shard.default.delayed_jobs_shard.activate!(:delayed_jobs)
+
+  if !Shard.default.is_a?(Shard) && Switchman.config[:force_sharding] && !ENV['SKIP_FORCE_SHARDING']
+    raise 'Sharding is supposed to be set up, but is not! Use SKIP_FORCE_SHARDING=1 to ignore'
+  end
 end

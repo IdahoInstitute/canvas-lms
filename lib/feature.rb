@@ -24,11 +24,16 @@ class Feature
     @state = 'allowed'
     opts.each do |key, val|
       next unless ATTRS.include?(key)
+      val = (Feature.production_environment? ? 'hidden' : 'allowed') if key == :state && val == 'hidden_in_prod'
       next if key == :state && !%w(hidden off allowed on).include?(val)
       instance_variable_set "@#{key}", val
     end
     # for RootAccount features, "allowed" state is redundant; show "off" instead
     @root_opt_in = true if @applies_to == 'RootAccount'
+  end
+
+  def clone_for_cache
+    Feature.new(feature: @feature, state: @state)
   end
 
   def default?
@@ -57,33 +62,34 @@ class Feature
 
   # Register one or more features.  Must be done during application initialization.
   # The feature_hash is as follows:
-=begin
-  automatic_essay_grading: {
-    display_name: lambda { I18n.t('features.automatic_essay_grading', 'Automatic Essay Grading') },
-    description: lambda { I18n.t('features.automatic_essay_grading_description, 'Popup text describing the feature goes here') },
-    applies_to: 'Course', # or 'RootAccount' or 'Account' or 'User'
-    state: 'allowed',     # or 'off' or 'on' or 'hidden'
-    root_opt_in: false,   # if true, 'allowed' features in source or site admin
-                          # will be inherited in "off" state by root accounts
-    enable_at: Date.new(2014, 1, 1),  # estimated release date shown in UI
-    beta: false,          # 'beta' tag shown in UI
-    development: false,   # whether the feature is restricted to development / test / beta instances
-    release_notes_url: 'http://example.com/',
-
-    # optional: you can supply a Proc to attach warning messages to and/or forbid certain transitions
-    # see lib/feature/draft_state.rb for example usage
-    custom_transition_proc: ->(user, context, from_state, transitions) do
-      if from_state == 'off' && context.is_a?(Course) && context.has_submitted_essays?
-        transitions['on']['warning'] = I18n.t('features.automatic_essay_grading.enable_warning',
-          'Enabling this feature after some students have submitted essays may yield inconsistent grades.')
-      end
-    end,
-
-    # optional hook to be called before after a feature flag change
-    # queue a delayed_job to perform any nontrivial processing
-    after_state_change_proc:  ->(context, old_state, new_state) { ... }
-  }
-=end
+  #   automatic_essay_grading: {
+  #     display_name: lambda { I18n.t('features.automatic_essay_grading', 'Automatic Essay Grading') },
+  #     description: lambda { I18n.t('features.automatic_essay_grading_description, 'Popup text describing the feature goes here') },
+  #     applies_to: 'Course', # or 'RootAccount' or 'Account' or 'User'
+  #     state: 'allowed',     # or 'off', 'on', 'hidden', or 'hidden_in_prod'
+  #                           # - 'hidden' means the feature must be set by a site admin before it will be visible
+  #                           #   (in that context and below) to other users
+  #                           # - 'hidden_in_prod' registers 'hidden' in production environments or 'allowed' elsewhere
+  #     root_opt_in: false,   # if true, 'allowed' features in source or site admin
+  #                           # will be inherited in "off" state by root accounts
+  #     enable_at: Date.new(2014, 1, 1),  # estimated release date shown in UI
+  #     beta: false,          # 'beta' tag shown in UI
+  #     development: false,   # whether the feature is restricted to development / test / beta instances
+  #     release_notes_url: 'http://example.com/',
+  #
+  #     # optional: you can supply a Proc to attach warning messages to and/or forbid certain transitions
+  #     # see lib/feature/draft_state.rb for example usage
+  #     custom_transition_proc: ->(user, context, from_state, transitions) do
+  #       if from_state == 'off' && context.is_a?(Course) && context.has_submitted_essays?
+  #         transitions['on']['warning'] = I18n.t('features.automatic_essay_grading.enable_warning',
+  #           'Enabling this feature after some students have submitted essays may yield inconsistent grades.')
+  #       end
+  #     end,
+  #
+  #     # optional hook to be called before after a feature flag change
+  #     # queue a delayed_job to perform any nontrivial processing
+  #     after_state_change_proc:  ->(context, old_state, new_state) { ... }
+  #   }
 
   def self.register(feature_hash)
     @features ||= {}
@@ -112,14 +118,12 @@ END
     },
     'use_new_styles' =>
     {
-      display_name: -> { I18n.t('features.new_styles', 'Use New Styles') },
-      description: -> { I18n.t('new_styles_description', <<-END) },
-We are working on a UI facelift to Canvas. Turn this on to opt-in to seeing the
-updated, simplified look and feel of the Canvas interface. This is a very "Work in progress"
-feature and should not be turned on in production for actual users yet.
+      display_name: -> { I18n.t('New UI') },
+      description: -> { I18n.t(<<END) },
+This enables an updated navigation, new dashboard and a simpler, more modern look and feel.
 END
       applies_to: 'RootAccount',
-      state: 'hidden',
+      state: 'allowed',
       root_opt_in: true,
       beta: true
     },
@@ -131,8 +135,8 @@ By default, Canvas will try to use Flash first to play videos. Turn this on to t
 then fall back to Flash.
 END
       applies_to: 'RootAccount',
-      state: 'allowed',
-      beta: true
+      state: 'on',
+      beta: false
     },
     'high_contrast' =>
     {
@@ -196,14 +200,13 @@ END
       root_opt_in: true,
       beta: true
     },
-    'quiz_moderate' =>
+    'recurring_calendar_events' =>
     {
-      display_name: -> { I18n.t('features.new_quiz_moderate', 'New Quiz Moderate Page') },
-      description: -> { I18n.t('new_quiz_moderate_desc', <<-END) },
-When Draft State and Quiz Statistics is allowed/on, this enables the new quiz moderate page for an account.
-END
+      display_name: -> { I18n.t('Recurring Calendar Events') },
+      description: -> { I18n.t("Allows the scheduling of recurring calendar events") },
       applies_to: 'Course',
       state: 'hidden',
+      root_opt_in: true,
       beta: true
     },
     'student_groups_next' =>
@@ -214,9 +217,7 @@ This enables the new student group page for an account. The new page was build t
 experience.
 END
       applies_to: 'RootAccount',
-      state: 'allowed',
-      root_opt_in: true,
-      beta: true
+      state: 'on'
     },
     'better_file_browsing' =>
     {
@@ -228,8 +229,7 @@ goes to the personal files page for a user ('/files') then you need to turn it o
 END
 
       applies_to: 'Course',
-      state: 'hidden',
-      beta: true
+      state: 'on'
     },
     'modules_next' =>
     {
@@ -243,7 +243,7 @@ END
     },
     'allow_opt_out_of_inbox' =>
     {
-      display_name: -> { I18n.t('features.allow_opt_out_of_inbox', "Allow users to opt out of the inbox") },
+      display_name: -> { I18n.t('features.allow_opt_out_of_inbox', "Allow Users to Opt-out of the Inbox") },
       description:  -> { I18n.t('allow_opt_out_of_inbox', <<-END) },
 Allow users to opt out of the Conversation's Inbox. This will cause all conversation messages and notifications to be sent as ASAP notifications to the user's primary email, hide the Conversation's Inbox unread messages badge on the Inbox, and hide the Conversation's notification preferences.
 END
@@ -271,16 +271,115 @@ END
       state: 'hidden',
       beta: true
     },
-    'quiz_stats' =>
+    'multiple_grading_periods' =>
     {
-      display_name: -> { I18n.t('features.new_quiz_statistics', 'New Quiz Statistics Page') },
-      description: -> { I18n.t('new_quiz_statistics_desc', <<-END) },
-Enable the new quiz statistics page for an account.
+      display_name: -> { I18n.t('features.multiple_grading_periods', 'Multiple Grading Periods') },
+      description: -> { I18n.t('enable_multiple_grading_periods', <<-END) },
+      Multiple Grading Periods allows teachers and admins to create grading periods with set
+      cutoff dates. Assignments can be filtered by these grading periods in the gradebook.
 END
       applies_to: 'Course',
       state: 'allowed',
-      development: true
-    }
+      root_opt_in: true
+    },
+    'course_catalog' =>
+    {
+      display_name: -> { I18n.t("Public Course Index") },
+      description:  -> { I18n.t('display_course_catalog', <<-END) },
+Show a searchable list of courses in this root account with the "Include this course in the public course index" flag enabled.
+END
+      applies_to: 'RootAccount',
+      state: 'allowed',
+      beta: true,
+      root_opt_in: true
+    },
+    'gradebook_list_students_by_sortable_name' =>
+    {
+      display_name: -> { I18n.t('features.gradebook_list_students_by_sortable_name', "Gradebook - List Students by Sortable Name") },
+      description: -> { I18n.t('enable_gradebook_list_students_by_sortable_name', <<-END) },
+List students by their sortable names in the Gradebook. Sortable name defaults to 'Last Name, First Name' and can be changed in settings.
+END
+      applies_to: 'Course',
+      state: 'allowed'
+    },
+    'usage_rights_required' =>
+    {
+      display_name: -> { I18n.t('Require Usage Rights for Uploaded Files') },
+      description: -> { I18n.t('If enabled, content designers must provide copyright and license information for files before they are published. Only applies if Better File Browsing is also enabled.') },
+      applies_to: 'Course',
+      state: 'hidden',
+      root_opt_in: true
+    },
+    'lti2_ui' =>
+      {
+        display_name: -> { I18n.t('Show LTI 2 Configuration UI') },
+        description: -> { I18n.t('If enabled, users will be able to configure LTI 2 tools.') },
+        applies_to: 'RootAccount',
+        state: 'hidden',
+        beta: true
+      },
+    'quizzes_lti' =>
+      {
+        display_name: -> { I18n.t('Quiz LTI plugin') },
+        description: -> { I18n.t('Use the new quiz LTI tool in place of regular canvas quizzes') },
+        applies_to: 'Course',
+        state: 'hidden',
+        beta: true,
+        root_opt_in: true
+      },
+    'disable_lti_post_only' =>
+      {
+        display_name: -> { I18n.t('Don\'t move LTI query params to POST body') },
+        description: -> { I18n.t('If enabled, query parameters will not be copied to the POST body during an LTI launch.') },
+        applies_to: 'RootAccount',
+        state: 'hidden',
+        beta: true,
+        root_opt_in: true
+      },
+    'bulk_sis_grade_export' =>
+      {
+          display_name: -> { I18n.t('Allow Bulk Grade Export to SIS') },
+          description:  -> { I18n.t('Allows teachers to mark grade data to be exported in bulk to SIS integrations.') },
+          applies_to: 'RootAccount',
+          state: 'hidden',
+          root_opt_in: true,
+          beta: true
+      },
+    'nc_or' =>
+        {
+            display_name: -> { I18n.t('Enable "OR" Condition for Modules') },
+            description:  -> { I18n.t('If enabled, modules will have the option to be marked as complete when only one of the requirements is met.') },
+            applies_to: 'Course',
+            state: 'hidden',
+            development: true,
+            root_opt_in: true
+        },
+    'use_new_tree' =>
+    {
+      display_name: -> { I18n.t('Use new folder tree in Files')},
+      description: -> {I18n.t('Replaces the current folder tree with a new accessible and more feature rich folder tree.')},
+      applies_to: 'Course',
+      state: 'hidden',
+      development: true,
+      root_opt_in: true
+    },
+    'moderated_grading' => {
+      display_name: -> { I18n.t('Moderated Grading') },
+      description: -> { I18n.t('Moderated Grading allows multiple graders to grade selected assignments independently, with a moderator providing the final grade.') },
+      applies_to: 'Course',
+      state: 'hidden',
+      development: true,
+      root_opt_in: true
+    },
+    'anonymous_grading' =>
+    {
+      display_name: -> { I18n.t('Anonymous Grading') },
+      description: -> { I18n.t("Anonymous grading forces student names to be hidden in SpeedGrader™") },
+      applies_to: 'Course',
+      state: 'hidden',
+      development: true,
+      root_opt_in: true,
+    },
   )
 
   def self.definitions

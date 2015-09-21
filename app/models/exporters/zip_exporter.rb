@@ -59,6 +59,9 @@ module Exporters
       Dir.mktmpdir do |dirname|
         zip_name = File.join(dirname, archive_name)
         Zip::OutputStream.open(zip_name) do |zipstream|
+          @folder_list.each do |folder|
+            add_folder(zipstream, folder)
+          end
           @file_list.each do |file|
             add_file(zipstream, file)
           end
@@ -90,6 +93,7 @@ module Exporters
 
     def build_file_list
       @file_list = []
+      @folder_list = []
       @total_size = 0
       @total_copied = 0
       @folders.each { |folder| process_folder(folder) }
@@ -98,10 +102,11 @@ module Exporters
 
     def process_folder(folder)
       return unless folder.grants_right?(@user, :read_contents)
+      @folder_list << folder unless folder.root_folder?
       folder.sub_folders.active.each do |sub_folder|
         process_folder(sub_folder)
       end
-      folder.attachments.not_deleted.each do |att|
+      folder.file_attachments_visible_to(@user).each do |att|
         process_file(att)
       end
     end
@@ -116,11 +121,25 @@ module Exporters
     def add_file(zipstream, file)
       path = file.full_display_path
       path = path[@common_prefix.length..-1] if path.starts_with?(@common_prefix)
-      zipstream.put_next_entry(path)
-      file.open do |chunk|
-        zipstream.write(chunk)
-        update_progress(chunk.size)
+      wrote_header = false
+      begin
+        file.open do |chunk|
+          unless wrote_header
+            zipstream.put_next_entry(path)
+            wrote_header = true
+          end
+          zipstream.write(chunk)
+          update_progress(chunk.size)
+        end
+      rescue => e
+        @export.add_error(I18n.t('Skipped file %{filename} due to error', filename: file.display_name), e)
       end
+    end
+
+    def add_folder(zipstream, folder)
+      path = folder.full_name
+      path = path[@common_prefix.length..-1] if path.starts_with?(@common_prefix)
+      zipstream.put_next_entry(path + '/')
     end
 
     def attach_zip(zip_filename)

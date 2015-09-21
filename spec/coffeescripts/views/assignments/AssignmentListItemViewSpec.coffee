@@ -4,9 +4,13 @@ define [
   'compiled/models/Submission'
   'compiled/views/assignments/AssignmentListItemView'
   'jquery'
+  'timezone'
+  'vendor/timezone/America/Juneau'
+  'vendor/timezone/fr_FR'
+  'helpers/I18nStubber'
   'helpers/fakeENV'
   'helpers/jquery.simulate'
-], (Backbone, Assignment, Submission, AssignmentListItemView, $, fakeENV) ->
+], (Backbone, Assignment, Submission, AssignmentListItemView, $, tz, juneau, french, I18nStubber, fakeENV) ->
   screenreaderText = null
   nonScreenreaderText = null
 
@@ -105,9 +109,12 @@ define [
     $.extend base, options
 
   createView = (model, options) ->
-    options = $.extend {canManage: true}, options
+    options = $.extend {canManage: true, canReadGrades: false}, options
 
-    ENV.PERMISSIONS = { manage: options.canManage }
+    ENV.PERMISSIONS = {
+      manage: options.canManage
+      read_grades: options.canReadGrades
+    }
 
     view = new AssignmentListItemView(model: model)
     view.$el.appendTo $('#fixtures')
@@ -141,8 +148,14 @@ define [
     setup: ->
       genSetup.call @
 
+      @snapshot = tz.snapshot()
+      I18nStubber.pushFrame()
+
     teardown: ->
       genTeardown.call @
+
+      tz.restore(@snapshot)
+      I18nStubber.popFrame()
 
   test "initializes child views if can manage", ->
     view = createView(@model, canManage: true)
@@ -169,30 +182,50 @@ define [
   test 'asks for confirmation before deleting an assignment', ->
     view = createView(@model)
 
-    group_stub = sinon.stub(view, 'visibleAssignments', -> [])
-    confirm_stub = sinon.stub(window, "confirm", -> true )
-    delete_spy = sinon.spy view, "delete"
+    @stub(view, 'visibleAssignments', -> [])
+    @stub(window, "confirm", -> true )
+    @spy view, "delete"
 
     view.$("#assignment_#{@model.id} .delete_assignment").click()
 
-    ok confirm_stub.called
-    ok delete_spy.called
-
-    confirm_stub.restore()
-    delete_spy.restore()
-    group_stub.restore()
+    ok window.confirm.called
+    ok view.delete.called
 
   test "delete destroys model", ->
     old_asset_string = ENV.context_asset_string
     ENV.context_asset_string = "course_1"
 
     view = createView(@model)
-    sinon.spy view.model, "destroy"
+    @spy view.model, "destroy"
 
     view.delete()
     ok view.model.destroy.called
-    view.model.destroy.restore()
 
+    ENV.context_asset_string = old_asset_string
+
+  test "delete calls screenreader message", ->
+
+    old_asset_string = ENV.context_asset_string
+    ENV.context_asset_string = "course_1"
+    server = sinon.fakeServer.create()
+    server.respondWith('DELETE', '/api/v1/courses/1/assignments/1',
+      [200, { 'Content-Type': 'application/json' }, JSON.stringify({
+      "description":"",
+      "due_at":null,
+      "grade_group_students_individually":false,
+      "grading_standard_id":null,
+      "grading_type":"points",
+      "group_category_id":null,
+      "id":"1",
+      "unpublishable":true,
+      "only_visible_to_overrides":false,
+      "locked_for_user":false})])
+
+    view = createView(@model)
+    view.delete()
+    @spy($, 'screenReaderFlashMessage')
+    server.respond()
+    equal $.screenReaderFlashMessage.callCount, 1
     ENV.context_asset_string = old_asset_string
 
   test "show score if score is set", ->
@@ -295,6 +328,67 @@ define [
     ok view.$("#module_tooltip_#{@model.id}").text().search("#{mods[0]}") != -1
     ok view.$("#module_tooltip_#{@model.id}").text().search("#{mods[1]}") != -1
 
+  test 'render score template with permission', ->
+    spy = @spy(AssignmentListItemView.prototype, 'updateScore')
+    createView(@model, canManage: false, canReadGrades: true)
+    ok spy.called
+
+  test 'does not render score template without permission', ->
+    spy = @spy(AssignmentListItemView.prototype, 'updateScore')
+    createView(@model, canManage: false, canReadGrades: false)
+    equal spy.callCount, 0
+
+  test "renders lockAt/unlockAt with locale-appropriate format string", ->
+    tz.changeLocale(french, 'fr_FR')
+    I18nStubber.setLocale 'fr_FR'
+    I18nStubber.stub 'fr_FR',
+      'date.formats.short': '%-d %b'
+      'date.abbr_month_names.8': 'août'
+    model = new AssignmentCollection([buildAssignment
+      id: 1
+      all_dates: [
+        { lock_at: "2113-08-28T04:00:00Z", title: "Summer Session" }
+        { unlock_at: "2113-08-28T04:00:00Z", title: "Winter Session" }]]).at(0)
+
+    view = createView(model, canManage: true)
+    $dds = view.dateAvailableColumnView.$("#vdd_tooltip_#{@model.id}_lock div")
+    equal $("span", $dds.first()).last().text().trim(), '28 août'
+    equal $("span", $dds.last()).last().text().trim(), '28 août'
+
+  test "renders lockAt/unlockAt in appropriate time zone", ->
+    tz.changeZone(juneau, 'America/Juneau')
+    I18nStubber.stub 'en',
+      'date.formats.short': '%b %-d'
+      'date.abbr_month_names.8': 'Aug'
+
+    model = new AssignmentCollection([buildAssignment
+      id: 1
+      all_dates: [
+        { lock_at: "2113-08-28T04:00:00Z", title: "Summer Session" }
+        { unlock_at: "2113-08-28T04:00:00Z", title: "Winter Session" }]]).at(0)
+
+    view = createView(model, canManage: true)
+    $dds = view.dateAvailableColumnView.$("#vdd_tooltip_#{@model.id}_lock div")
+    equal $("span", $dds.first()).last().text().trim(), 'Aug 27'
+    equal $("span", $dds.last()).last().text().trim(), 'Aug 27'
+
+  test "renders due date column with locale-appropriate format string", ->
+    tz.changeLocale(french, 'fr_FR')
+    I18nStubber.setLocale 'fr_FR'
+    I18nStubber.stub 'fr_FR',
+      'date.formats.short': '%-d %b'
+      'date.abbr_month_names.8': 'août'
+    view = createView(@model, canManage: true)
+    equal view.dateDueColumnView.$("#vdd_tooltip_#{@model.id}_due div dd").first().text().trim(), '29 août'
+
+  test "renders due date column in appropriate time zone", ->
+    tz.changeZone(juneau, 'America/Juneau')
+    I18nStubber.stub 'en',
+      'date.formats.short': '%b %-d'
+      'date.abbr_month_names.8': 'Aug'
+    view = createView(@model, canManage: true)
+    equal view.dateDueColumnView.$("#vdd_tooltip_#{@model.id}_due div dd").first().text().trim(), 'Aug 28'
+
   module 'AssignmentListItemViewSpec—alternate grading type: percent',
     setup: ->
       genSetup.call @, assignment_grade_percent()
@@ -312,6 +406,13 @@ define [
     ok nonScreenreaderText().match('1.56/5 pts')[0], 'sets non-screenreader screen text'
     ok nonScreenreaderText().match('90%')[0], 'sets non-screenreader grade text'
 
+  test "excused score and grade outputs", ->
+    @submission.set 'excused': true
+    @model.set 'submission', @submission
+    @model.trigger 'change:submission'
+
+    ok screenreaderText().match('This assignment has been excused.')
+    ok nonScreenreaderText().match('Excused')
 
   module 'AssignmentListItemViewSpec—alternate grading type: pass_fail',
     setup: ->

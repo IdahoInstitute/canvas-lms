@@ -36,6 +36,11 @@
 #           "type": "integer",
 #           "description": "The student's score"
 #         },
+#         "submitted_or_assessed_at": {
+#           "description": "The datetime the resulting OutcomeResult was submitted at, or absent that, when it was assessed.",
+#           "example": "2013-02-01T00:00:00-06:00",
+#           "type": "datetime"
+#         },
 #         "links": {
 #           "example": "{\"user\"=>\"3\", \"learning_outcome\"=>\"97\", \"alignment\"=>\"53\"}",
 #           "description": "Unique identifiers of objects associated with this result"
@@ -193,8 +198,9 @@ class OutcomeResultsController < ApplicationController
   #
   # @argument user_ids[] [Integer]
   #   If specified, only the users whose ids are given will be included in the
-  #   results. it is an error to specify an id for a user who is not a student in
-  #   the context
+  #   results. SIS ids can be used, prefixed by "sis_user_id:".
+  #   It is an error to specify an id for a user who is not a student in
+  #   the context.
   #
   # @argument outcome_ids[] [Integer]
   #   If specified, only the outcomes whose ids are given will be included in the
@@ -363,13 +369,15 @@ class OutcomeResultsController < ApplicationController
   def require_outcome_context
     reject! "invalid context type" unless @context.is_a?(Course)
 
-    return true if is_authorized_action?(@context, @current_user, [:manage_grades, :view_all_grades])
+    return true if @context.grants_any_right?(@current_user, session, :manage_grades, :view_all_grades)
     reject! "users not specified and no access to all grades", :forbidden unless params[:user_ids]
-    user_ids = Api.value_to_array(params[:user_ids]).map(&:to_i).uniq
+    user_id_params = Api.value_to_array(params[:user_ids])
+    user_ids = api_find_all(users_for_outcome_context, user_id_params).map(&:id).uniq
     enrollments = @context.enrollments.where(user_id: user_ids)
-    reject! "specified users not enrolled" unless enrollments.length == user_ids.length
+    enrollment_user_ids = enrollments.map(&:user_id).uniq
+    reject! "specified users not enrolled" unless enrollment_user_ids.length == user_ids.length
     reject! "not authorized to read grades for specified users", :forbidden unless enrollments.all? do |e|
-      is_authorized_action?(e, @current_user, :read_grades)
+      e.grants_right?(@current_user, session, :read_grades)
     end
   end
 
@@ -431,10 +439,9 @@ class OutcomeResultsController < ApplicationController
 
   def require_users
     reject! "cannot specify both user_ids and section_id" if params[:user_ids] && params[:section_id]
-
     if params[:user_ids]
-      user_ids = Api.value_to_array(params[:user_ids]).map(&:to_i).uniq
-      @users = users_for_outcome_context.where(id: user_ids).uniq
+      user_ids = Api.value_to_array(params[:user_ids]).uniq
+      @users = api_find_all(users_for_outcome_context, user_ids).uniq
       reject!( "can only include id's of users in the outcome context") if @users.count != user_ids.count
     elsif params[:section_id]
       @section = @context.course_sections.where(id: params[:section_id].to_i).first
@@ -442,7 +449,7 @@ class OutcomeResultsController < ApplicationController
       @users = @section.students
     end
     @users ||= users_for_outcome_context
-    @users = @users.order(:id)
+    @users.sort! {|a,b| a.id <=> b.id}
   end
 
   def users_for_outcome_context

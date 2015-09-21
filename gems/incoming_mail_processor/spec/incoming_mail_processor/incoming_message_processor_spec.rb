@@ -63,11 +63,11 @@ describe IncomingMailProcessor::IncomingMessageProcessor do
   def test_message (filename)
     message = get_processed_message(filename)
 
-    text_body =  message.body.strip!
-    text_body.should == get_expected_text(filename)
+    text_body =  message.body.strip
+    text_body.should == get_expected_text(filename).strip
 
-    html_body =  message.html_body.strip!
-    html_body.should == get_expected_html(filename)
+    html_body =  message.html_body.strip
+    html_body.should == get_expected_html(filename).strip
   end
 
   def get_processed_message(name)
@@ -128,7 +128,9 @@ describe IncomingMailProcessor::IncomingMessageProcessor do
 
   describe "#process_single" do
     it "should not choke on invalid UTF-8" do
-      IncomingMessageProcessor.new(message_handler, error_reporter).process_single(Mail.new { body "he\xffllo" }, '')
+      IncomingMessageProcessor.new(message_handler, error_reporter).process_single(Mail.new {
+          content_type 'text/plain; charset=UTF-8'
+          body "he\xffllo".force_encoding(Encoding::BINARY) }, '')
 
       message_handler.body.should == "hello"
       message_handler.html_body.should == "hello"
@@ -137,7 +139,7 @@ describe IncomingMailProcessor::IncomingMessageProcessor do
     it "should convert another charset to UTF-8" do
       IncomingMessageProcessor.new(message_handler, error_reporter).process_single(Mail.new {
           content_type 'text/plain; charset=Shift-JIS'
-          body "\x83\x40"
+          body "\x83\x40".force_encoding(Encoding::BINARY)
         }, '')
 
       comparison_string = "\xe3\x82\xa1"
@@ -169,6 +171,26 @@ describe IncomingMailProcessor::IncomingMessageProcessor do
       IncomingMessageProcessor.new(message_handler, error_reporter).process_single(incoming_bounce_message, '')
     end
 
+    it "creates text body from html only messages" do
+      IncomingMessageProcessor.new(message_handler, error_reporter).process_single(Mail.new {
+          content_type 'text/html; charset=UTF-8'
+          body '<h1>This is HTML</h1>'
+        }, '')
+      message_handler.body.should == "************\nThis is HTML\n************"
+      message_handler.html_body.should == '<h1>This is HTML</h1>'
+    end
+
+    it "creates missing text part from html part" do
+      IncomingMessageProcessor.new(message_handler, error_reporter).process_single(Mail.new {
+          html_part do
+            content_type 'text/html; charset=UTF-8'
+            body '<h1>This is HTML</h1>'
+          end
+        }, '')
+      message_handler.body.should == "************\nThis is HTML\n************"
+      message_handler.html_body.should == '<h1>This is HTML</h1>'
+    end
+
     it "works with multipart emails with no html part" do
       test_message('multipart_mixed_no_html_part.eml')
     end
@@ -183,6 +205,28 @@ describe IncomingMailProcessor::IncomingMessageProcessor do
 
     it "should be able to extract text and html bodies from no_image.eml" do
       message = test_message('no_image.eml')
+    end
+
+    context "reporting stats" do
+      let (:message) { Mail.new(content_type: 'text/plain; charset=UTF-8', body: "hello") }
+
+      it "increments the processed count" do
+        CanvasStatsd::Statsd.expects(:increment).with("incoming_mail_processor.incoming_message_processed.").once
+        IncomingMessageProcessor.new(message_handler, error_reporter).process_single(message, '')
+      end
+
+      it "reports the age based on the date header" do
+        Timecop.freeze do
+          message.date = 10.minutes.ago
+          CanvasStatsd::Statsd.expects(:timing).once.with("incoming_mail_processor.message_age.", 10*60*1000)
+          IncomingMessageProcessor.new(message_handler, error_reporter).process_single(message, '')
+        end
+      end
+
+      it "does not report the age if there is no date header" do
+        CanvasStatsd::Statsd.expects(:timing).never
+        IncomingMessageProcessor.new(message_handler, error_reporter).process_single(message, '')
+      end
     end
   end
 
@@ -275,6 +319,53 @@ describe IncomingMailProcessor::IncomingMessageProcessor do
         :config => config['imap'].except('error_folder').symbolize_keys,
       })
       IncomingMessageProcessor.configure(config)
+    end
+
+    it "splits messages between multiple workers" do
+      IncomingMessageProcessor.configure({
+        'workers' => 3,
+        'imap' => {
+          'username' => 'user@example.com',
+        }
+      })
+      @mock_mailbox.expects(:connect)
+      @mock_mailbox.expects(:each_message).with({stride: 3, offset: 0})
+      @mock_mailbox.expects(:disconnect)
+      imp = IncomingMessageProcessor.new(message_handler, error_reporter)
+      imp.process(worker_id: 0)
+      @mock_mailbox.expects(:connect)
+      @mock_mailbox.expects(:each_message).with({stride: 3, offset: 1})
+      @mock_mailbox.expects(:disconnect)
+      imp.process(worker_id: 1)
+      @mock_mailbox.expects(:connect)
+      @mock_mailbox.expects(:each_message).with({stride: 3, offset: 2})
+      @mock_mailbox.expects(:disconnect)
+      imp.process(worker_id: 2)
+    end
+
+    it "only processes a single account if asked to do so" do
+      IncomingMessageProcessor.configure({
+        'imap' => {
+          'server' => "fake",
+          'username' => 'should_be_overridden@fake.fake',
+          'accounts' => [
+            { 'username' => 'user1@fake.fake', 'password' => 'pass1' },
+            { 'username' => 'user2@fake.fake', 'password' => 'pass2' },
+            { 'username' => 'user3@fake.fake', 'password' => 'pass3' },
+          ],
+        },
+      })
+
+      imp = IncomingMessageProcessor
+      imp.expects(:create_mailbox).returns(@mock_mailbox).with do |account|
+        account.config[:username] == 'user2@fake.fake'
+      end
+
+      @mock_mailbox.expects(:connect)
+      @mock_mailbox.expects(:each_message)
+      @mock_mailbox.expects(:disconnect)
+
+      IncomingMessageProcessor.new(message_handler, error_reporter).process(:mailbox_account_address => 'user2@fake.fake')
     end
 
     describe "message processing" do
@@ -438,7 +529,7 @@ describe IncomingMailProcessor::IncomingMessageProcessor do
       })
       processed_second = false
 
-      TimeoutMailbox.send(:define_method, :each_message) do
+      TimeoutMailbox.send(:define_method, :each_message) do |opts|
         if @config[:username] == 'first'
           raise Timeout::Error
         else

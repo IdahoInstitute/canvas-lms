@@ -16,6 +16,8 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
+require 'securerandom'
+
 module DataFixup
   module FixAuditLogUuidIndexes
     MAPPING_TABLE = 'corrupted_index_mapping'
@@ -169,6 +171,11 @@ module DataFixup
         @start_time ||= Time.new(2014, 6, 14)
       end
 
+      # The date the audit logs were enabled.
+      def end_time
+        @end_time ||= Time.new(2014, 8, 20)
+      end
+
       def index
         @index
       end
@@ -229,11 +236,12 @@ module DataFixup
         need_tombstone = []
         updates = []
         oldest_bucket = index.bucket_for_time(start_time)
+        newest_bucket = index.bucket_for_time(end_time)
 
         # Check each row to see if we need to update it or inspect it.
         rows.each do |row|
           row = format_row(row)
-          next if row['bucket'] < oldest_bucket
+          next if row['bucket'] < oldest_bucket || row['bucket'] > newest_bucket
           current_id, timestamp, key = extract_row_keys(index, row)
           actual_id = query_corrected_id(current_id, timestamp)
           if actual_id.nil?
@@ -252,9 +260,13 @@ module DataFixup
             current_id, timestamp, key = extract_row_keys(index, row)
             event = events[current_id]
 
+            # An index record might exist without a related event.
+            # Just skip this for now.
+            next unless event
+
             # If the event is a corrupted event we have already fixed it so save
             # the mapping and move along.
-            if event.event_type == 'corrupted'
+            if event.event_type == CORRUPTED_EVENT_TYPE
               store_corrected_id(current_id, timestamp, current_id)
               next
             end
@@ -296,7 +308,7 @@ module DataFixup
             # Loop through each record we need to create a tombstone for.
             need_tombstone.each do |row|
               current_id, timestamp, key = extract_row_keys(index, row)
-              actual_id = CanvasUUID.generate
+              actual_id = SecureRandom.uuid
               create_tombstone(actual_id, timestamp)
               store_corrected_id(current_id, timestamp, actual_id)
               updates << [current_id, key, timestamp, actual_id]

@@ -29,7 +29,7 @@ module FeatureFlags
 
   def feature_allowed?(feature)
     flag = lookup_feature_flag(feature)
-    return flag.allowed? if flag
+    return flag.enabled? || flag.allowed? if flag
     false
   end
 
@@ -60,17 +60,16 @@ module FeatureFlags
   end
 
   def feature_flag_cache_key(feature)
-    ['feature_flag', self.class.name, self.global_id, feature.to_s].cache_key
+    ['feature_flag2', self.class.name, self.global_id, feature.to_s].cache_key
   end
 
   # return the feature flag for the given feature that is defined on this object, if any.
   # (helper method.  use lookup_feature_flag to test policy.)
   def feature_flag(feature)
     self.shard.activate do
-      result = Rails.cache.fetch(feature_flag_cache_key(feature)) do
-        self.feature_flags.where(feature: feature.to_s).first || :nil
+      result = MultiCache.fetch(feature_flag_cache_key(feature)) do
+        self.feature_flags.where(feature: feature.to_s).first
       end
-      result = nil if result == :nil
       result
     end
   end
@@ -101,7 +100,7 @@ module FeatureFlags
     is_site_admin = self.is_a?(Account) && self.site_admin?
 
     # inherit the feature definition as a default unless it's a hidden feature
-    retval = feature_def unless feature_def.hidden? && !is_site_admin && !override_hidden
+    retval = feature_def.clone_for_cache unless feature_def.hidden? && !is_site_admin && !override_hidden
 
     @feature_flag_cache ||= {}
     return @feature_flag_cache[feature] if @feature_flag_cache.key?(feature)
@@ -111,6 +110,7 @@ module FeatureFlags
     accounts = feature_flag_account_ids.map do |id|
       account = Account.new
       account.id = id
+      account.shard = Shard.shard_for(id, self.shard)
       account.readonly!
       account
     end

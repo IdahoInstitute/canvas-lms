@@ -39,14 +39,29 @@ module Lti
       subject.tool_proxy = tool_proxy
       subject.context = account
       subject.resource_link_id = '123456'
-      subject.save.should == true
+      expect(subject.save).to eq true
     end
 
     it 'fails if there is a resource_link_id and no context' do
       subject.tool_proxy = tool_proxy
       subject.resource_link_id = '123456'
-      subject.save.should == false
-      subject.errors.first.should == [:context, "can't be blank"]
+      expect(subject.save).to eq false
+      expect(subject.errors.first).to eq [:context, "can't be blank"]
+    end
+
+    describe '#custom_settings' do
+      before :each do
+        ToolSetting.create(tool_proxy: tool_proxy, context: account, resource_link_id: 'abc', custom: {link: :setting, a: 1, b: 2, c: 3})
+        ToolSetting.create(tool_proxy: tool_proxy, context: account, custom: {binding: :setting, a: 1, b: 2, d: 4})
+        ToolSetting.create(tool_proxy: tool_proxy, custom: {proxy: :setting, a: 1, c: 5, d: 4})
+      end
+
+        it 'creates the json' do
+          expect(ToolSetting.custom_settings(tool_proxy.id, account, 'abc')).to eq({link: :setting, a: 1, b: 2, c: 3, :binding=>:setting, :d=>4, :proxy=>:setting})
+        end
+
+
+
     end
 
 

@@ -11,6 +11,19 @@ def create_rubric_with_criterion_points(points)
   wait_for_ajaximations
 end
 
+def assignment_with_rubric(points, title = 'new rubric')
+  @assignment = create_assignment_with_points(points)
+  rubric_model(title: title, data:
+                                      [{
+                                           description: "Some criterion",
+                                           points: points,
+                                           id: 'crit1',
+                                           ratings:
+                                               [{description: "Good", points: points, id: 'rat1', criterion_id: 'crit1'}]
+                                       }], description: 'new rubric description')
+  @association = @rubric.associate_with(@assignment, @course, purpose: 'grading', use_for_grading: false)
+end
+
 def edit_rubric_after_updating
   fj(".rubric .edit_rubric_link:visible").click
   driver.find_element(:tag_name, "body").click
@@ -35,8 +48,8 @@ def should_delete_a_rubric
   driver.switch_to.alert.accept
   wait_for_ajaximations
   keep_trying_until do
-    Rubric.last.workflow_state.should == 'deleted'
-    ff('#rubrics .rubric').each { |rubric| rubric.should_not be_displayed }
+    expect(Rubric.last.workflow_state).to eq 'deleted'
+    ff('#rubrics .rubric').each { |rubric| expect(rubric).not_to be_displayed }
   end
 end
 
@@ -50,20 +63,20 @@ def should_edit_a_rubric
   wait_for_ajaximations
   keep_trying_until do
     rubric.reload
-    rubric.title.should == edit_title
-    f('.rubric_title .title').text.should == edit_title
+    expect(rubric.title).to eq edit_title
+    expect(f('.rubric_title .title').text).to eq edit_title
   end
 end
 
 def should_allow_fractional_points
   create_rubric_with_criterion_points "5.5"
-  fj(".rubric .criterion:visible .display_criterion_points").text.should == '5.5'
-  fj(".rubric .criterion:visible .rating .points").text.should == '5.5'
+  expect(fj(".rubric .criterion:visible .display_criterion_points").text).to eq '5.5'
+  expect(fj(".rubric .criterion:visible .rating .points").text).to eq '5.5'
 end
 
 def should_round_to_2_decimal_places
   create_rubric_with_criterion_points "5.249"
-  fj(".rubric .criterion:visible .display_criterion_points").text.should == '5.25'
+  expect(fj(".rubric .criterion:visible .display_criterion_points").text).to eq '5.25'
 end
 
 def should_round_to_an_integer_when_splitting
@@ -72,7 +85,7 @@ def should_round_to_an_integer_when_splitting
 
   split_ratings(1)
 
-  ffj(".rubric .criterion:visible .rating .points")[1].text.should == '3'
+  expect(ffj(".rubric .criterion:visible .rating .points")[1].text).to eq '3'
 end
 
 def should_pick_the_lower_value_when_splitting_without_room_for_an_integer
@@ -81,8 +94,8 @@ def should_pick_the_lower_value_when_splitting_without_room_for_an_integer
 
   split_ratings(1)
 
-  ffj(".rubric .criterion:visible .rating .points").count.should == 3
-  ffj(".rubric .criterion:visible .rating .points")[1].text.should == '0'
+  expect(ffj(".rubric .criterion:visible .rating .points").count).to eq 3
+  expect(ffj(".rubric .criterion:visible .rating .points")[1].text).to eq '0'
 end
 
 def import_outcome

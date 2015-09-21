@@ -1,7 +1,7 @@
 define [
   'react'
   'jquery'
-  'compiled/react_files/components/FileRenameForm'
+  'jsx/files/FileRenameForm'
   'compiled/models/Folder'
 ], (React, $, FileRenameForm, Folder) ->
 
@@ -15,12 +15,11 @@ define [
             id: 999
             name: 'original_name.txt'
           name: 'options_name.txt'
-      @form = React.renderComponent(FileRenameForm(props), $('<div>').appendTo('body')[0])
+      @form = React.render(React.createFactory(FileRenameForm)(props), $('<div>').appendTo('#fixtures')[0])
 
     teardown: ->
-      #TODO: oddness with the current modal implementation makes teardown not work
-      #as the DOM has been mutated. Hopefully we can ease this pain with a react modal
-      #React.unmountComponentAtNode(@form.getDOMNode().parentNode)
+      React.unmountComponentAtNode(@form.getDOMNode().parentNode)
+      $("#fixtures").empty()
 
   test 'switches to editing file name state with button click', ->
     Simulate.click(@form.refs.renameBtn.getDOMNode())
@@ -58,3 +57,29 @@ define [
     Simulate.click(@form.refs.renameBtn.getDOMNode())
     ok(@form.state.isEditing)
     Simulate.click(@form.refs.commitChangeBtn.getDOMNode())
+
+  test 'onNameConflictResolved preserves expandZip option when renaming', ->
+    expect(2)
+    @form.setProps(
+      fileOptions:
+        file:
+          name: 'file_name.md'
+        expandZip: 'true'
+      onNameConflictResolved: (options) ->
+        equal(options.expandZip, 'true')
+    )
+    Simulate.click(@form.refs.renameBtn.getDOMNode())
+    ok(@form.state.isEditing)
+    Simulate.click(@form.refs.commitChangeBtn.getDOMNode())
+
+  test 'onNameConflictResolved preserves expandZip option when replacing', ->
+    expect(1)
+    @form.setProps(
+      fileOptions:
+        file:
+          name: 'file_name.md'
+        expandZip: 'true'
+      onNameConflictResolved: (options) ->
+        equal(options.expandZip, 'true')
+    )
+    Simulate.click(@form.refs.replaceBtn.getDOMNode())

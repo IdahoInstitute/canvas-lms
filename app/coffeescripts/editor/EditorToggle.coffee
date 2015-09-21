@@ -4,8 +4,13 @@ define [
   'jquery'
   'Backbone'
   'compiled/fn/preventDefault'
+  'compiled/views/editor/KeyboardShortcuts'
   'tinymce.editor_box'
-], (_, I18n, $, Backbone, preventDefault) ->
+], (_, I18n, $, Backbone, preventDefault, KeyboardShortcuts) ->
+
+  ###
+  xsslint safeString.property content
+  ###
 
   ##
   # Toggles an element between a rich text editor and itself
@@ -47,7 +52,13 @@ define [
       @textArea.val @getContent()
       @textArea.insertBefore @el
       @el.detach()
-      @switchViews.insertBefore @textArea if @options.switchViews
+      if @options.switchViews
+        @switchViews.insertBefore @textArea
+        @switchViews.find('a').toggle() if !@switchViews.find('a').first().is(":visible")
+      @infoIcon ||= (new KeyboardShortcuts()).render().$el
+      @infoIcon.css("float", "right")
+      @infoIcon.insertAfter @switchViews
+      $('<div/>', style: "clear: both").insertBefore @textArea
       @done.insertAfter @textArea
       opts = {focus: true, tinyOptions: {}}
       if @options.editorBoxLabel
@@ -68,6 +79,7 @@ define [
       @textArea._removeEditor()
       @textArea.detach()
       @switchViews.detach() if @options.switchViews
+      @infoIcon.detach()
       @done.detach()
       # so tiny doesn't hang on to this instance
       @textArea.attr 'id', ''
@@ -102,13 +114,16 @@ define [
     # creates the "done" button used to exit the editor
     # @api private
     createDone: ->
-      $('<a/>')
-        .html(@options.doneText)
+      $('<div/>').addClass('edit_html_done_wrapper').append(
+        $('<a/>')
+        .text(@options.doneText)
         .attr('href', '#')
-        .addClass('btn edit-html-done edit_html_done')
+        .addClass('btn edit_html_done')
         .attr('title', I18n.t('done.title', 'Click to finish editing the rich text area'))
-        .click preventDefault => @display()
-
+        .click preventDefault =>
+          @display()
+          @editButton.focus()
+      )
     ##
     # create the switch views links to go between rich text and a textarea
     # @api private

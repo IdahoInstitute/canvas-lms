@@ -11,12 +11,11 @@ module Lti
         StudentViewEnrollment => LtiOutbound::LTIRoles::ContextNotNamespaced::LEARNER
     }
 
-    def initialize(canvas_user, canvas_root_account, canvas_tool, canvas_context, variable_substitutor = nil)
+    def initialize(canvas_user, canvas_root_account, canvas_tool, canvas_context)
       @canvas_user = canvas_user
       @canvas_root_account = canvas_root_account
       @canvas_context = canvas_context
       @opaque_identifier = canvas_tool.opaque_identifier_for(@canvas_user)
-      @variable_substitutor = variable_substitutor
       @pseudonym = false
     end
 
@@ -70,13 +69,13 @@ module Lti
     def current_course_enrollments
       return [] unless @canvas_context.is_a?(Course)
 
-      @current_course_enrollments ||= @canvas_user.current_enrollments.where(course_id: @canvas_context).to_a
+      @current_course_enrollments ||= @canvas_user.enrollments.current.where(course_id: @canvas_context).to_a
     end
 
     def current_account_enrollments()
       unless @current_account_enrollments
         if @canvas_context.respond_to?(:account_chain) && !@canvas_context.account_chain.empty?
-          @current_account_enrollments = @canvas_user.account_users.find_all_by_account_id(@canvas_context.account_chain).uniq
+          @current_account_enrollments = @canvas_user.account_users.where(account_id: @canvas_context.account_chain).uniq.to_a
         else
           @current_account_enrollments = []
         end
@@ -86,7 +85,7 @@ module Lti
 
     def concluded_course_enrollments
       @concluded_course_enrollments ||=
-          @canvas_context.is_a?(Course) ? @canvas_user.concluded_enrollments.where(course_id: @canvas_context).to_a : []
+          @canvas_context.is_a?(Course) ? @canvas_user.enrollments.concluded.where(course_id: @canvas_context).to_a : []
     end
   end
 end

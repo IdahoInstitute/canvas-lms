@@ -4,7 +4,9 @@ module AvatarHelper
     return ["/images/messages/avatar-50.png", ''] unless user_or_id
     user_id = user_or_id.is_a?(User) ? user_or_id.id : user_or_id
     user = user_or_id.is_a?(User) && user_or_id
-    if session["reported_#{user_id}"]
+    account = @account || @domain_root_account
+    is_admin = account && account.grants_right?(@current_user, session, :manage)
+    if session["reported_#{user_id}"] && !is_admin
       ["/images/messages/avatar-50.png", '']
     else
       avatar_settings = @domain_root_account && @domain_root_account.settings[:avatars] || 'enabled'
@@ -48,8 +50,9 @@ module AvatarHelper
     link_opts[:style] += ";width: #{opts[:size]}px;height: #{opts[:size]}px" if opts[:size]
     link_opts[:href] = url if url
     link_opts[:title] = opts[:title] if opts[:title]
-    content = content_tag(:span, display_name, class: 'screenreader-only') +
-      (opts[:edit] ? content_tag(:i, nil, class: 'icon-edit') : '')
+    content = content_tag(:span, display_name, class: 'screenreader-only')
+    content += (opts[:edit] ? content_tag(:i, nil, class: 'icon-edit') : '')
+    content += (opts[:show_flag] ? content_tag(:i, nil, class: 'icon-flag') : '')
     content_tag(:a, content, link_opts)
   end
 
@@ -57,7 +60,7 @@ module AvatarHelper
     if participants.size == 1
       avatar_url_for_user(participants.first)
     elsif participants.size == 2
-      avatar_url_for_user(participants.select{ |u| u.id != conversation.user_id }.first)
+      avatar_url_for_user(participants.find{ |u| u.id != conversation.user_id })
     else
       avatar_url_for_group
     end

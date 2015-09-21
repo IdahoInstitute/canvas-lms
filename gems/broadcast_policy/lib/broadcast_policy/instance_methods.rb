@@ -48,12 +48,10 @@ module BroadcastPolicy
     def generate_prior_version
       obj = self.class.new
       self.attributes.each do |attr, value|
-        obj.__send__("#{attr}=", value) rescue nil
+        next unless obj.column_for_attribute(attr)
+        value = changed_attributes[attr] if changed_attributes.key?(attr)
+        obj.write_attribute(attr, value)
       end
-      self.changes.each do |attr, values|
-        obj.__send__("#{attr}=", values[0]) rescue nil
-      end
-      obj.workflow_state = self.workflow_state_was if obj.respond_to?("workflow_state=") && self.respond_to?("workflow_state_was")
       obj
     end
 
@@ -61,7 +59,7 @@ module BroadcastPolicy
     def broadcast_notifications
       return if @broadcasted
       @broadcasted = true
-      raise ArgumentError, "Broadcast Policy block not supplied for #{self.class.to_s}" unless self.class.broadcast_policy_list
+      raise ArgumentError, "Broadcast Policy block not supplied for #{self.class}" unless self.class.broadcast_policy_list
       self.class.broadcast_policy_list.broadcast(self)
     end
 
@@ -91,45 +89,20 @@ module BroadcastPolicy
       fields  = opts[:fields] || []
       fields = [fields] unless fields.is_a?(Array)
 
-      begin
-        fields.map {|field| self.prior_version.send(field) != self.send(field) }.include?(true) and
-        self.workflow_state == state.to_s and
+      fields.map {|field| self.prior_version.send(field) != self.send(field) }.include?(true) &&
+        self.workflow_state == state.to_s &&
         self.prior_version.workflow_state == state.to_s
-      rescue Exception => e
-        logger.warn "Could not check if a change was made: #{e.inspect}"
-        false
-      end
-    end
-
-    def changed_in_states(states, opts={})
-      !states.select{|s| changed_in_state(s, opts)}.empty?
-    end
-
-    def remained_in_state(state)
-      begin
-        self.workflow_state == state.to_s and
-        self.prior_version.workflow_state == state.to_s
-      rescue Exception => e
-        logger.warn "Could not check if a record remained in the same state: #{e.inspect}"
-        false
-      end
     end
 
     def changed_state(new_state=nil, old_state=nil)
-      begin
-        if new_state and old_state
-          self.workflow_state == new_state.to_s and
+      if new_state && old_state
+        self.workflow_state == new_state.to_s &&
           self.prior_version.workflow_state == old_state.to_s
-        elsif new_state
-          self.workflow_state.to_s == new_state.to_s and
+      elsif new_state
+        self.workflow_state.to_s == new_state.to_s &&
           self.prior_version.workflow_state != self.workflow_state
-        else
-          self.workflow_state != self.prior_version.workflow_state
-        end
-      rescue Exception => e
-        ErrorReport.log_exception(:broadcast_policy, e, message: "Could not check if a record changed state")
-        logger.warn "Could not check if a record changed state: #{e.inspect}"
-        false
+      else
+        self.workflow_state != self.prior_version.workflow_state
       end
     end
     alias :changed_state_to :changed_state

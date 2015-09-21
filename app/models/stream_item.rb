@@ -20,7 +20,7 @@ require 'open_object'
 require 'set'
 
 class StreamItem < ActiveRecord::Base
-  serialize :data
+  serialize_utf8_safe :data
 
   has_many :stream_item_instances
   has_many :users, :through => :stream_item_instances
@@ -35,7 +35,19 @@ class StreamItem < ActiveRecord::Base
 
   attr_accessible :context, :asset
   after_destroy :destroy_stream_item_instances
-  attr_accessor :unread
+  attr_accessor :unread, :participant, :invalidate_immediately
+
+  before_save :ensure_notification_category
+
+  def ensure_notification_category
+    if self.asset_type == 'Message'
+      self.notification_category ||= get_notification_category
+    end
+  end
+
+  def get_notification_category
+    self.read_attribute(:data)['notification_category'] || self.data.notification_category
+  end
 
   def self.reconstitute_ar_object(type, data)
     return nil unless data
@@ -65,7 +77,14 @@ class StreamItem < ActiveRecord::Base
     end
 
     res.instance_variable_set(:@attributes, data)
+    res.instance_variable_set(:@attributes_cache, {})
     res.instance_variable_set(:@new_record, false) if data['id']
+
+    # the after_find from NotificationPreloader won't get triggered
+    if res.respond_to?(:preload_notification) && res.read_attribute(:notification_id)
+      res.preload_notification
+    end
+
     res
   end
 
@@ -171,7 +190,7 @@ class StreamItem < ActiveRecord::Base
     when AssessmentRequest
       res = object.attributes
     else
-      raise "Unexpected stream item type: #{object.class.to_s}"
+      raise "Unexpected stream item type: #{object.class}"
     end
     if self.context_type
       res['context_short_name'] = Rails.cache.fetch(['short_name_lookup', self.context_type, self.context_id].cache_key) do
@@ -267,11 +286,10 @@ class StreamItem < ActiveRecord::Base
 
       # touch all the users to invalidate the cache
       User.transaction do
-        lock_type = true
-        lock_type = 'FOR NO KEY UPDATE' if User.connection.adapter_name == 'PostgreSQL' && User.connection.send(:postgresql_version) >= 90300
         # lock the rows in a predefined order to prevent deadlocks
-        User.where(id: user_ids).lock(lock_type).order(:id).pluck(:id)
-        User.where(id: user_ids).update_all(updated_at: Time.now.utc)
+        ids_to_touch = User.where(id: user_ids_subset).not_recently_touched.
+          lock(:no_key_update).order(:id).pluck(:id)
+        User.where(id: ids_to_touch).update_all(updated_at: Time.now.utc)
       end
     end
 
@@ -293,14 +311,16 @@ class StreamItem < ActiveRecord::Base
 
   def self.prepare_object_for_unread(object)
     case object
-    when DiscussionTopic
-      DiscussionTopic.send(:preload_associations, object, :discussion_topic_participants)
+      when DiscussionTopic
+        ActiveRecord::Associations::Preloader.new(object, :discussion_topic_participants).run
     end
   end
 
   def self.object_unread_for_user(object, user_id)
     case object
     when DiscussionTopic
+      object.read_state(user_id)
+    when Submission
       object.read_state(user_id)
     else
       nil
@@ -329,18 +349,20 @@ class StreamItem < ActiveRecord::Base
     count = 0
 
     scope = where("updated_at<?", before_date).
-        includes(:context).
+        preload(:context).
         limit(1000)
     scope = scope.includes(:stream_item_instances) if touch_users
 
     while true
-      batch = scope.reload.all
+      batch = scope.reload.to_a
       batch.each do |item|
         count += 1
         if touch_users
           user_ids.add(item.stream_item_instances.map(&:user_id))
         end
+
         # this will destroy the associated stream_item_instances as well
+        item.invalidate_immediately = true
         item.destroy
       end
       break if batch.empty?
@@ -383,7 +405,7 @@ class StreamItem < ActiveRecord::Base
     case res
     when DiscussionTopic, Announcement
       if res.require_initial_post
-        res.write_attribute(:user_has_posted, true)
+        res.user_has_posted = true
         if res.user_ids_that_can_see_responses && !res.user_ids_that_can_see_responses.member?(viewing_user_id)
           original_res = res
           res = original_res.clone
@@ -400,7 +422,14 @@ class StreamItem < ActiveRecord::Base
 
   public
   def destroy_stream_item_instances
-    self.stream_item_instances.with_each_shard do |scope|
+    self.stream_item_instances.shard(self).activate do |scope|
+      user_ids = scope.pluck(:user_id)
+      if !self.invalidate_immediately && user_ids.count > 100
+        StreamItemCache.send_later_if_production_enqueue_args(:invalidate_all_recent_stream_items,
+          { :priority => Delayed::LOW_PRIORITY }, user_ids, self.context_type, self.context_id)
+      else
+        StreamItemCache.invalidate_all_recent_stream_items(user_ids, self.context_type, self.context_id)
+      end
       scope.delete_all
       nil
     end

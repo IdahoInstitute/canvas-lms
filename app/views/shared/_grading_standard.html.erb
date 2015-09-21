@@ -1,3 +1,4 @@
+<% grading_standard ||= nil %>
 <% grading_standard_list ||= false %>
 <% data = grading_standard.data rescue GradingStandard.default_grading_standard %>
 <div class="grading_standard" id="grading_standard_<%= grading_standard ? grading_standard.id : 'blank' %>">
@@ -13,7 +14,7 @@
               <% if !grading_standard_list %>
                 <a href="#" class="find_grading_standard_link no-hover" title="<%= t('find_existing_scheme', 'Find Existing Grading Scheme') %>"><%= image_tag "find.png", :alt => t('find', "Find") %> <%= t('select_another_scheme','Select Another Scheme') %></a>
               <% end %>
-                <a href="#" title="<%= t('edit_scheme', 'Edit Grading Scheme') %>" class="edit_grading_standard_link no-hover <%= 'read_only' if grading_standard && !can_do(grading_standard, @current_user, :update) %>"><i class="icon-edit standalone-icon"></i></a>
+                <a href="#" title="<%= t('edit_scheme', 'Edit Grading Scheme') %>" class="edit_grading_standard_link no-hover <%= 'read_only' if grading_standard && grading_standard.assessed_assignment? %>"><i class="icon-edit standalone-icon"></i></a>
               <% if grading_standard_list %>
                 <a href="#" title="<%= t('delete_scheme', 'Delete Grading Scheme') %>" class="delete_grading_standard_link no-hover"><i class="icon-trash standalone-icon"></i></a>
               <% else %>
@@ -38,7 +39,6 @@
         </tr>
       </thead>
     </table>
-    <div class="data_holder">
     <table style="width: 100%; margin-bottom: 20px;" class="grading_standard_data">
       <caption class="screenreader-only">
         <%= t('grading_standard_summary', "A table that contains your grading scheme. The name of the value and the range are on the top. Each row contains a minimum and maximum percentage value.") %>
@@ -125,7 +125,6 @@
         </td>
       </tr>
     </table>
-    </div>
     <% unless grading_standard_list %>
       <div class="displaying" style="text-align: right;">
         <a href="<%= context_url(@context, :context_grading_standards_url) %>"><%= t('managing_grading_standards', 'manage grading schemes') %></a>
@@ -144,7 +143,6 @@
     </div>
     <table class="side_tabs_table grading_standards_holder" style="display: none;">
       <tr>
-      
         <td class="left">
           <ul class="grading_standards_select unstyled_list side_tabs">
             <li class="grading_standard_select blank" style="display: none;">

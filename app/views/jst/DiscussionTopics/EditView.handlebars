@@ -1,9 +1,12 @@
-{{#if draftStateEnabled}}
-  {{#if title}}
-    <h1 class="screenreader-only" style="display: inline">{{title}}</h1>
-  {{else}}
-    <h1 class="screenreader-only" style="display: inline">{{#t "page_header_title"}}New Discussion{{/t}}</h1>
-  {{/if}}
+{{#if title}}
+  <h1 class="screenreader-only" style="display: inline">{{title}}</h1>
+{{else}}
+  <h1 class="screenreader-only" style="display: inline">
+    {{#t "page_header_title"}}New Discussion{{/t}}
+  </h1>
+{{/if}}
+
+{{#unless isAnnouncement}}
   <div class="discussion-edit-header row-fluid">
     <div class="span4 offset8 text-right">
       {{#if published}}
@@ -19,12 +22,13 @@
       {{/if}}
     </div>
   </div>
-{{/if}}
-
+{{/unless}}
 
 <fieldset>
   <div class="control-group">
-    <label class="hidden-inline-text" for="discussion-title">{{#t "topic_title"}}Topic Title{{/t}}</label>
+    <label class="hidden-inline-text" for="discussion-title">
+      {{#t "topic_title"}}Topic Title{{/t}}
+    </label>
     <input type="text"
            id="discussion-title"
            name="title"
@@ -45,7 +49,9 @@
       <div style="clear:both;"></div>
       <textarea name="message"
                 class="input-block-level"
-                style="width: 100%; min-height: 200px;">{{convertApiUserContent message forEditing=1}}</textarea>
+                style="width: 100%; min-height: 200px;">
+        {{convertApiUserContent message forEditing=1}}
+      </textarea>
   </div>
 
 </fieldset>
@@ -53,12 +59,21 @@
 <fieldset>
 
   <div class="control-group">
-    <label class="control-label" for="discussion_attachment_uploaded_data">{{#t "attachment"}}Attachment{{/t}}</label>
+    <label class="control-label"
+      aria-label="{{#t}}Add Attachment{{/t}}"
+      for="discussion_attachment_uploaded_data">
+      {{#t "attachment"}}Attachment{{/t}}
+    </label>
     <div class="controls">
       {{#each attachments}}
         <div class="attachmentRow">
-          <a href="{{url}}" class="{{mimeClass content-type}}">{{display_name}}</a>
-          <button type="button" class="removeAttachment close" style="float:none">×</button>
+          <a aria-label="attachment" href="{{url}}" class="{{mimeClass content-type}}">
+            {{display_name}}
+          </a>
+          <button type="button"
+                  class="removeAttachment close"
+                  style="float:none"
+                  aria-label="{{#t}}Remove Attachment{{/t}}">×</button>
         </div>
       {{/each}}
       <input type="file"
@@ -74,7 +89,7 @@
 
   {{#ifAny isTopic contextIsCourse canModerate showAssignment}}
   <div class="control-group">
-    <label class="control-label">{{#t "options"}}Options{{/t}}</label>
+    <div class="control-label">{{#t "options"}}Options{{/t}}</div>
     <div class="controls">
       {{#if isTopic}}
         <label class="checkbox" for="threaded">
@@ -91,6 +106,10 @@
               aria-controls="discussion_topic_delay_post_container"}}
             {{#t "delay_posting"}}Delay posting{{/t}}
           </label>
+          <label class="screenreader-only" id="discussion_topic_delay_post_accessible_label">
+            {{#t}}Delay posting this topic until{{/t}}
+            {{datepickerScreenreaderPrompt}}
+          </label>
           <label id="discussion_topic_delay_post_container"
                  style="{{hiddenUnless delayed_post_at}}"
                  class="checkbox">
@@ -99,7 +118,10 @@
                    class="datetime_field input-medium"
                    name="delayed_post_at"
                    {{! TODO: what would be the best way to get this formatted right? }}
-                   value="{{datetimeFormatted delayed_post_at false}}">
+                   value="{{datetimeFormatted delayed_post_at}}"
+                   aria-labelledby="discussion_topic_delay_post_accessible_label"
+                   data-tooltip='{"position":"top","force_position":"true"}'
+                   title="{{accessibleDateFormat}}" />
           </label>
         {{/if}}
         <label class="checkbox" for="require_initial_post">
@@ -116,12 +138,14 @@
           {{#t "enable_podcast_feed"}}Enable podcast feed{{/t}}
         </label>
 
-        <label id="podcast_has_student_posts_container"
-               style="{{hiddenUnless podcast_url}}"
-               class="checkbox" for="podcast_has_student_posts">
-          {{checkbox "podcast_has_student_posts"}}
-          {{#t "include_replies_in_podcast_feed"}}Include Replies in podcast feed{{/t}}
-        </label>
+        {{#if contextIsCourse}}
+          <label id="podcast_has_student_posts_container"
+                 style="{{hiddenUnless podcast_url}}"
+                 class="checkbox" for="podcast_has_student_posts">
+            {{checkbox "podcast_has_student_posts"}}
+            {{#t "include_replies_in_podcast_feed"}}Include student replies in podcast feed{{/t}}
+          </label>
+        {{/if}}
       {{/if}}
       {{#if showAssignment}}
         <label class="checkbox" for="use_for_grading">
@@ -133,6 +157,31 @@
           {{#t "use_for_grading"}}Graded{{/t}}
         </label>
       {{/if}}
+
+      <label class="checkbox" for="allow_rating">
+        {{checkbox "allow_rating"
+          id="allow_rating"
+          class="element_toggler"
+          checked=allow_rating
+          aria-controls="rating_settings_container"}}
+        {{#t "allow_liking"}}Allow liking{{/t}}
+      </label>
+      <div id="rating_settings_container" style="{{hiddenUnless allow_rating}}; margin-left: 20px;">
+        <label class="checkbox" for="only_graders_can_rate">
+          {{checkbox "only_graders_can_rate"
+            id="only_graders_can_rate"
+            class="element_toggler"
+            checked=only_graders_can_rate}}
+          {{#t "only_graders_can_like"}}Only graders can like{{/t}}
+        </label>
+        <label class="checkbox" for="sort_by_rating">
+          {{checkbox "sort_by_rating"
+            id="sort_by_rating"
+            class="element_toggler"
+            checked=sort_by_rating}}
+          {{#t "sort_by_likes"}}Sort by likes{{/t}}
+        </label>
+      </div>
     </div>
   </div>
   {{/ifAny}}
@@ -141,21 +190,32 @@
 
 {{#if isTopic}}
   {{#unless isLargeRoster}}
-    <div id="group_category_options" class="control-group"></div>
+    {{#if contextIsCourse}}
+      <div id="group_category_options" class="control-group"></div>
+    {{/if}}
   {{/unless}}
 
   {{#if contextIsCourse}}
     <div id="availability_options" style="{{hiddenIf set_assignment}}">
       <fieldset>
         <div class="control-group">
-          <label class="control-label" for="delayed_post_at">{{#t "available_from"}}Available From{{/t}}</label>
+          <label class="control-label" for="delayed_post_at">
+            {{#t "available_from"}}Available From{{/t}}
+          </label>
+          <label class="screenreader-only" id="discussion_topic_available_from_accessible_label">
+            {{#t}}Discussion Topic will be available starting at{{/t}}
+            {{datepickerScreenreaderPrompt}}
+          </label>
           <div class="controls">
             <input type="text"
                    class="datetime_field input-medium"
                    name="delayed_post_at"
                    id="delayed_post_at"
+                   aria-labelledby="discussion_topic_available_from_accessible_label"
                    {{! TODO: what would be the best way to get this formatted right? }}
-                   value="{{datetimeFormatted delayed_post_at false}}">
+                   value="{{datetimeFormatted delayed_post_at}}"
+                   data-tooltip='{"position":"top","force_position":"true"}'
+                   title="{{accessibleDateFormat}}"/>
           </div>
         </div>
       </fieldset>
@@ -164,13 +224,20 @@
         <fieldset>
           <div class="control-group">
             <label class="control-label" for="lock_at">{{#t "until"}}Until{{/t}}</label>
+            <label class="screenreader-only" id="discussion_topic_available_until_accessible_label">
+              {{#t}}Discussion Topic will be available until{{/t}}
+              {{datepickerScreenreaderPrompt}}
+            </label>
             <div class="controls">
               <input type="text"
                      class="datetime_field input-medium"
                      name="lock_at"
                      id="lock_at"
+                     aria-labelledby="discussion_topic_available_until_accessible_label"
                      {{! TODO: what would be the best way to get this formatted right? }}
-                     value="{{datetimeFormatted lock_at false}}">
+                     value="{{datetimeFormatted lock_at}}"
+                     data-tooltip='{"position":"top","force_position":"true"}'
+                     title="{{accessibleDateFormat}}"/>
             </div>
           </div>
         </fieldset>
@@ -183,7 +250,9 @@
   <div id="assignment_options" style="{{hiddenUnless set_assignment}}">
     <fieldset>
       <div class="control-group">
-        <label class="control-label" for="discussion_topic_assignment_points_possible">{{#t "points_possible"}}Points Possible{{/t}}</label>
+        <label class="control-label" for="discussion_topic_assignment_points_possible">
+          {{#t "points_possible"}}Points Possible{{/t}}
+        </label>
         <div class="controls">
           <input type="text"
                  id="discussion_topic_assignment_points_possible"
@@ -191,9 +260,14 @@
                  class="input-small"
                  value="{{assignment.pointsPossible}}" />
         </div>
+          <div id=discussion_point_change_warning class="alert form-column-right">
+              {{#t}}If you change an assignment's points possible you must regrade the assignment.{{/t}}
+          </div>
       </div>
 
       <div id="grading_type_options" class="control-group"></div>
+
+      <div id="post_to_sis_options" class="control-group"></div>
 
       <div id="assignment_group_options" class="control-group"></div>
 
@@ -202,23 +276,25 @@
       {{/unless}}
     </fieldset>
 
-    <hr>
-
-    {{#if differentiatedAssignmentsEnabled}}
-      <div class="text-center pad-box-mini" style="margin-bottom:10px">
-        <span>
-          <em>
-          {{#t "only_visible_to_overrides_note"}}Note: This discussion is <strong>only</strong> visible to the section(s) specified below:{{/t}}
-          </em>
-        </span>
+    <div id="overrides-wrapper">
+      <div class="form-column-left">
+        {{#t}}Assign{{/t}}
       </div>
-    {{/if}}
+      <div class="overrides-column-right js-assignment-overrides overrideFormFlex">
+      </div>
+    </div>
 
-    <div class='js-assignment-overrides'></div>
   </div>
 {{/if}}
 
 <div class="form-actions flush">
+  {{#if canPublish}}
+    <button type="button"
+            data-text-while-loading="{{#t "saving"}}Saving...{{/t}}"
+            class="btn btn-default save_and_publish">
+      {{#t "buttons.save_and_publish"}}Save & Publish{{/t}}
+    </button>
+  {{/if}}
   <button type="submit"
           data-text-while-loading="{{#t "saving"}}Saving...{{/t}}"
           class="btn btn-primary">{{#t "save"}}Save{{/t}}</button>

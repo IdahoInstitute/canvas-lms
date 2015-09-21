@@ -23,9 +23,11 @@ class ProtectAttributes
     @target = target
     !(@target.accessible_attributes.nil? && @target.protected_attributes.nil?)
   end
-  def failure_message_for_should
+
+  def failure_message
     "expected #{@target} to protect attributes"
   end
+#  alias_method :failure_message_for_should, :failure_message
 end
 
 def protect_attributes
@@ -33,24 +35,14 @@ def protect_attributes
 end
 
 describe 'Models' do
-
-  context "config/initializers/active_record.rb" do
-
-    it "should return the first descendant of ActiveRecord::Base when calling base_ar_class" do
-      Account.base_ar_class.should == Account
-      Group.base_ar_class.should == Group
-      TeacherEnrollment.base_ar_class.should == Enrollment
-    end
-  end
-
   it "should use attr_accessible or attr_protected" do
     ignore_classes = [
         ActiveRecord::Base,
-        ActiveRecord::SessionStore::Session,
         Delayed::Backend::ActiveRecord::Job,
         Delayed::Backend::ActiveRecord::Job::Failed,
         Version,
       ]
+    (ignore_classes << ActiveRecord::SessionStore::Session) rescue nil
     (ignore_classes << AddThumbnailUuid::Thumbnail) rescue nil
     (ignore_classes << Story) rescue nil
     (ignore_classes << CustomField) rescue nil
@@ -59,7 +51,7 @@ describe 'Models' do
     (ignore_classes << Woozel) rescue nil
     ActiveRecord::Base.send(:subclasses).each do |subclass|
       next unless subclass.name # unnamed class, probably from specs
-      subclass.should protect_attributes unless ignore_classes.include?(subclass)
+      expect(subclass).to protect_attributes unless ignore_classes.include?(subclass)
     end
   end
 end

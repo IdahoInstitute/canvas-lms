@@ -67,7 +67,7 @@ class DelayedMessage < ActiveRecord::Base
     when CommunicationChannel
       where(:communication_channel_id => context)
     else
-      where(:context_id => context, :context_type => context.class.base_ar_class.to_s)
+      where(:context_id => context, :context_type => context.class.base_class.to_s)
     end
   }
   
@@ -114,7 +114,9 @@ class DelayedMessage < ActiveRecord::Base
     end
     delayed_messages = uniqs.map{|key, val| val}.compact
     delayed_messages = delayed_messages.sort_by{|dm| [dm.notification.sort_order, dm.notification.category] }
-    first = delayed_messages.detect{|m| m.communication_channel && m.communication_channel.active?}
+    first = delayed_messages.detect{|m| m.communication_channel &&
+                                    m.communication_channel.active? &&
+                                    !m.communication_channel.bouncing?}
     to = first.communication_channel rescue nil
     return nil unless to
     return nil if delayed_messages.empty?

@@ -5,13 +5,12 @@ define [
   'compiled/models/Assignment'
   'compiled/views/assignments/AssignmentGroupListItemView'
   'compiled/views/assignments/AssignmentListItemView'
+  'compiled/views/assignments/AssignmentGroupListView'
   'jquery'
   'helpers/fakeENV'
   'helpers/jquery.simulate'
   'compiled/behaviors/elementToggler'
-], (Backbone, AssignmentGroupCollection, AssignmentGroup, Assignment, AssignmentGroupListItemView, AssignmentListItemView, $, fakeENV) ->
-  fixtures = $('#fixtures')
-
+], (Backbone, AssignmentGroupCollection, AssignmentGroup, Assignment, AssignmentGroupListItemView, AssignmentListItemView, AssignmentGroupListView, $, fakeENV, simulate, elementToggler) ->
   assignment1 = ->
     date1 =
       "due_at":"2013-08-28T23:59:00-06:00"
@@ -100,7 +99,6 @@ define [
   createView = (model, options) ->
     options = $.extend {canManage: true}, options
     ENV.PERMISSIONS = { manage: options.canManage }
-    sinon.stub( AssignmentGroupListItemView.prototype, "currentUserId", -> 1)
 
     view = new AssignmentGroupListItemView
       model: model
@@ -110,39 +108,62 @@ define [
 
     view
 
+  createCollectionView = () ->
+    model = group3()
+    options = $.extend {canManage: true}, options
+    ENV.PERMISSIONS = { manage: options.canManage }
+    groupCollection = new AssignmentGroupCollection([model])
+    assignmentGroupsView = new AssignmentGroupListView
+      collection: groupCollection
+      sortURL: "http://localhost:3000/courses/1/assignments/"
+      assignment_sort_base_url:"http://localhost:3000/courses/1/assignments/"
+      course: new Backbone.Model(id: 1)
+    assignmentGroupsView.$el.appendTo $('#fixtures')
+    assignmentGroupsView.render()
+    assignmentGroupsView
+
   module 'AssignmentGroupListItemView',
     setup: ->
       fakeENV.setup()
       @model = createAssignmentGroup()
+      $(document).off()
+      elementToggler.bind()
 
     teardown: ->
       fakeENV.teardown()
-      AssignmentGroupListItemView.prototype.currentUserId.restore()
       $('#fixtures').empty()
 
   test "initializes collection", ->
     view = createView(@model)
     ok view.collection
 
+  test "drags icon not being overridden on drag", ->
+    view = createCollectionView()
+    assignmentGroups = {
+      item: view.$el.find('.search_show'),
+    }
+    view.$el.find('#assignment_1').trigger('sortstart', assignmentGroups)
+    dragHandle = view.$("#assignment_1").find("i").attr('class')
+    equal dragHandle, "icon-drag-handle"
+
+
   test "does not parse response with multiple due dates", ->
     models = @model.get("assignments").models
     a1 = models[0]
     a2 = models[1]
 
-    sinon.spy(a1, 'doNotParse')
-    sinon.spy(a2, 'doNotParse')
+    @spy(a1, 'doNotParse')
+    @spy(a2, 'doNotParse')
 
     createView(@model)
 
     # first assignment has multiple due dates
     ok a1.multipleDueDates()
     ok a1.doNotParse.called
-    a1.doNotParse.restore()
 
     # second assignment has single due dates
     ok !a2.multipleDueDates()
     ok !a2.doNotParse.called
-    a2.doNotParse.restore()
 
   test "initializes child views if can manage", ->
     view = createView(@model)
@@ -197,8 +218,11 @@ define [
 
   test "toggleCollapse toggles expansion", ->
     view = createView(@model)
+    $toggle_el = view.$el.find(".element_toggler")
     #make sure the cache starts at true
     view.toggleCache() unless view.shouldBeExpanded()
+
+    ok(view.currentlyExpanded())
 
     view.toggleCollapse()
     ok !view.currentlyExpanded()

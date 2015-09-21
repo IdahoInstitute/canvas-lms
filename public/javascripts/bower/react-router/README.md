@@ -1,7 +1,9 @@
+[![npm package](https://img.shields.io/npm/v/react-router.svg?style=flat-square)](https://www.npmjs.org/package/react-router)
+[![build status](https://img.shields.io/travis/rackt/react-router.svg?style=flat-square)](https://travis-ci.org/rackt/react-router)
+[![dependency status](https://img.shields.io/david/rackt/react-router.svg?style=flat-square)](https://david-dm.org/rackt/react-router)
+
 React Router
 ============
-
-[![Build Status](https://travis-ci.org/rackt/react-router.svg?branch=master)](https://travis-ci.org/rackt/react-router)
 
 A complete routing library for React.
 
@@ -14,15 +16,6 @@ Docs
 Important Notes
 ---------------
 
-### **** NPM USERS THIS PACKAGE MOVED ****
-
-This package has moved from `react-nested-router` to `react-router`.
-
-Update your package.json to point to the new package, or if you aren't
-ready to update, make sure your package.json specifically points to
-`0.3.5` or less, `0.3.6` just throws an error telling you the package
-has moved.
-
 ### SemVer
 
 Before our `1.0` release, breaking API changes will cause a bump to
@@ -30,7 +23,7 @@ Before our `1.0` release, breaking API changes will cause a bump to
 `0.5.0` will have breaking changes.
 
 Please refer to the [upgrade guide](/UPGRADE_GUIDE.md) and
-[changelog](/CHANGELOG) when upgrading.
+[changelog](/CHANGELOG.md) when upgrading.
 
 Installation
 ------------
@@ -45,7 +38,7 @@ This library is written with CommonJS modules. If you are using
 browserify, webpack, or similar, you can consume it like anything else
 installed from npm.
 
-There is also a UMD build available on bower, find the library on
+There is also a global build available on bower, find the library on
 `window.ReactRouter`.
 
 Features
@@ -53,13 +46,16 @@ Features
 
 - Nested views mapped to nested routes
 - Modular construction of route hierarchy
-- Fully asynchronous transition hooks
+- Sync and async transition hooks
 - Transition abort / redirect / retry
 - Dynamic segments
 - Query parameters
 - Links with automatic `.active` class when their route is active
 - Multiple root routes
-- Hash or HTML5 history URLs
+- Hash or HTML5 history (with fallback) URLs
+- Declarative Redirect routes
+- Declarative NotFound routes
+- Browser scroll behavior with transitions
 
 Check out the `examples` directory to see how simple previously complex UI
 and workflows are to create.
@@ -68,17 +64,29 @@ What's it look like?
 --------------------
 
 ```js
-React.renderComponent((
-  <Routes location="history">
-    <Route handler={App}>
-      <Route name="about" handler={About}/>
-      <Route name="users" handler={Users}>
-        <Route name="user" path="/user/:userId" handler={User}/>
-      </Route>
+var routes = (
+  <Route handler={App} path="/">
+    <DefaultRoute handler={Home} />
+    <Route name="about" handler={About} />
+    <Route name="users" handler={Users}>
+      <Route name="recent-users" path="recent" handler={RecentUsers} />
+      <Route name="user" path="/user/:userId" handler={User} />
+      <NotFoundRoute handler={UserRouteNotFound}/>
     </Route>
-    <Route path="*" handler={NotFound}/>
-  </Routes>
-), document.body);
+    <NotFoundRoute handler={NotFound}/>
+    <Redirect from="company" to="about" />
+  </Route>
+);
+
+Router.run(routes, function (Handler) {
+  React.render(<Handler/>, document.body);
+});
+
+// Or, if you'd like to use the HTML5 history API for cleaner URLs:
+
+Router.run(routes, Router.HistoryLocation, function (Handler) {
+  React.render(<Handler/>, document.body);
+});
 ```
 
 See more in the [overview guide](/docs/guides/overview.md).
@@ -105,8 +113,8 @@ Benefits of This Approach
    application is represented by these routes.
 
 4. **URLs are your first thought, not an after-thought** - With React
-   Nested Router, you don't get UI on the page without configuring a url
-   first. Fortunately, its wildly productive this way, too.
+   Router, you don't get UI on the page without configuring a url first.
+   Fortunately, its wildly productive this way, too.
 
 Related Modules
 ---------------

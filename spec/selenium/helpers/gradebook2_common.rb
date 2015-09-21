@@ -1,5 +1,22 @@
 require File.expand_path(File.dirname(__FILE__) + '/../common')
 
+def init_course_with_students(num = 1)
+  course_with_teacher_logged_in
+
+  @students = []
+  (1..num).each do |i|
+    student = User.create!(:name => "Student_#{i}")
+    student.register!
+
+    e1 = @course.enroll_student(student)
+    e1.workflow_state = 'active'
+    e1.save!
+    @course.reload
+
+    @students.push student
+  end
+end
+
 def set_default_grade(cell_index, points = "5")
   open_assignment_options(cell_index)
   f('[data-action="setDefaultGrade"]').click
@@ -7,7 +24,7 @@ def set_default_grade(cell_index, points = "5")
   f('.grading_value').send_keys(points)
   submit_dialog(dialog, '.ui-button')
   keep_trying_until do
-    driver.switch_to.alert.should_not be_nil
+    expect(driver.switch_to.alert).not_to be_nil
     driver.switch_to.alert.dismiss
     true
   end
@@ -26,7 +43,7 @@ def open_assignment_options(cell_index)
   driver.action.move_to(assignment_cell).perform
   trigger = assignment_cell.find_element(:css, '.gradebook-header-drop')
   trigger.click
-  fj("##{trigger['aria-owns']}").should be_displayed
+  expect(fj("##{trigger['aria-owns']}")).to be_displayed
 end
 
 def find_slick_cells(row_index, element)
@@ -41,7 +58,7 @@ def edit_grade(cell, grade)
     driver.execute_script("$('#{cell}').hover().click()")
     sleep 1
     input = fj("#{cell} .grade")
-    input.should_not be_nil
+    expect(input).not_to be_nil
     input
   end
   set_value(grade_input, grade)
@@ -50,14 +67,14 @@ def edit_grade(cell, grade)
 end
 
 def validate_cell_text(cell, text)
-  cell.text.should == text
+  expect(cell.text).to eq text
   cell.text
 end
 
 def open_gradebook_settings(element_to_click = nil)
   keep_trying_until do
     f('#gradebook_settings').click
-    ff('#gradebook-toolbar ul.ui-kyle-menu').last.should be_displayed
+    expect(ff('#gradebook-toolbar ul.ui-kyle-menu').last).to be_displayed
     true
   end
   yield(f('#gradebook_settings')) if block_given?
@@ -84,7 +101,7 @@ def switch_to_section(section=nil)
   section = section.id if section.is_a?(CourseSection)
   section ||= ""
   fj('.section-select-button:visible').click
-  keep_trying_until { fj('.section-select-menu:visible').should be_displayed }
+  keep_trying_until { expect(fj('.section-select-menu:visible')).to be_displayed }
   fj("label[for='section_option_#{section}']").click
   wait_for_ajaximations
 end
@@ -102,29 +119,49 @@ def conclude_and_unconclude_course
   @course.reload
 end
 
-def data_setup
-  course_with_teacher_logged_in
-  assignment_setup
+def gradebook_data_setup(opts={})
+  assignment_setup_defaults
+  assignment_setup(opts)
 end
 
 def data_setup_as_observer
   user_with_pseudonym
   course_with_observer_logged_in user: @user
   @course.observers=[@observer]
+  assignment_setup_defaults
   assignment_setup
   @all_students.each {|s| s.observers=[@observer]}
 end
 
-def assignment_setup
-  course_with_teacher_logged_in
+def assignment_setup_defaults
+  @assignment_1_points = "10"
+  @assignment_2_points = "5"
+  @assignment_3_points = "50"
+  @attendance_points = "15"
+
+  @student_name_1 = "student 1"
+  @student_name_2 = "student 2"
+  @student_name_3 = "student 3"
+
+  @student_1_total_ignoring_ungraded = "100%"
+  @student_2_total_ignoring_ungraded = "66.67%"
+  @student_3_total_ignoring_ungraded = "66.67%"
+  @student_1_total_treating_ungraded_as_zeros = "18.75%"
+  @student_2_total_treating_ungraded_as_zeros = "12.5%"
+  @student_3_total_treating_ungraded_as_zeros = "12.5%"
+  @default_password = "qwerty"
+end
+
+def assignment_setup(opts={})
+  course_with_teacher_logged_in(opts)
   @course.grading_standard_enabled = true
   @course.save!
   @course.reload
 
   #add first student
-  @student_1 = User.create!(:name => STUDENT_NAME_1)
+  @student_1 = User.create!(:name => @student_name_1)
   @student_1.register!
-  @student_1.pseudonyms.create!(:unique_id => "nobody1@example.com", :password => DEFAULT_PASSWORD, :password_confirmation => DEFAULT_PASSWORD)
+  @student_1.pseudonyms.create!(:unique_id => "nobody1@example.com", :password => @default_password, :password_confirmation => @default_password)
 
   e1 = @course.enroll_student(@student_1)
   e1.workflow_state = 'active'
@@ -132,9 +169,9 @@ def assignment_setup
   @course.reload
   #add second student
   @other_section = @course.course_sections.create(:name => "the other section")
-  @student_2 = User.create!(:name => STUDENT_NAME_2)
+  @student_2 = User.create!(:name => @student_name_2)
   @student_2.register!
-  @student_2.pseudonyms.create!(:unique_id => "nobody2@example.com", :password => DEFAULT_PASSWORD, :password_confirmation => DEFAULT_PASSWORD)
+  @student_2.pseudonyms.create!(:unique_id => "nobody2@example.com", :password => @default_password, :password_confirmation => @default_password)
   e2 = @course.enroll_student(@student_2, :section => @other_section)
 
   e2.workflow_state = 'active'
@@ -142,9 +179,9 @@ def assignment_setup
   @course.reload
 
   #add third student
-  @student_3 = User.create!(:name => STUDENT_NAME_3)
+  @student_3 = User.create!(:name => @student_name_3)
   @student_3.register!
-  @student_3.pseudonyms.create!(:unique_id => "nobody3@example.com", :password => DEFAULT_PASSWORD, :password_confirmation => DEFAULT_PASSWORD)
+  @student_3.pseudonyms.create!(:unique_id => "nobody3@example.com", :password => @default_password, :password_confirmation => @default_password)
   e3 = @course.enroll_student(@student_3)
   e3.workflow_state = 'active'
   e3.save!
@@ -158,7 +195,7 @@ def assignment_setup
                                            :course => @course,
                                            :name => 'A name that would not reasonably fit in the header cell which should have some limit set',
                                            :due_at => nil,
-                                           :points_possible => ASSIGNMENT_1_POINTS,
+                                           :points_possible => @assignment_1_points,
                                            :submission_types => 'online_text_entry,online_upload',
                                            :assignment_group => @group
                                        })
@@ -187,7 +224,7 @@ def assignment_setup
                                             :course => @course,
                                             :name => 'second assignment',
                                             :due_at => nil,
-                                            :points_possible => ASSIGNMENT_2_POINTS,
+                                            :points_possible => @assignment_2_points,
                                             :submission_types => 'online_text_entry',
                                             :assignment_group => @group
                                         })
@@ -206,7 +243,7 @@ def assignment_setup
                                            :course => @course,
                                            :name => 'assignment three',
                                            :due_at => due_date,
-                                           :points_possible => ASSIGNMENT_3_POINTS,
+                                           :points_possible => @assignment_3_points,
                                            :submission_types => 'online_text_entry',
                                            :assignment_group => @group
                                        })
@@ -218,7 +255,7 @@ def assignment_setup
                                                 :name => 'attendance assignment',
                                                 :title => 'attendance assignment',
                                                 :due_at => nil,
-                                                :points_possible => ATTENDANCE_POINTS,
+                                                :points_possible => @attendance_points,
                                                 :submission_types => 'attendance',
                                                 :assignment_group => @group,
                                             })
@@ -227,4 +264,50 @@ def assignment_setup
       :title => 'not-graded assignment',
       :submission_types => 'not_graded',
       :assignment_group => @group)
+end
+
+def get_group_points
+  group_points_holder = keep_trying_until do
+    group_points_holder = ff('div.assignment-points-possible')
+    group_points_holder
+  end
+  group_points_holder
+end
+
+def check_group_points(expected_weight_text)
+  for i in 2..3 do
+    expect(get_group_points[i].text).to eq expected_weight_text[i-2] + ' of grade'
+  end
+end
+
+def set_group_weight(assignment_group, weight_number)
+  f('#gradebook_settings').click
+  wait_for_ajaximations
+  f('[aria-controls="assignment_group_weights_dialog"]').click
+
+  dialog = f('#assignment_group_weights_dialog')
+  expect(dialog).to be_displayed
+
+  group_check = dialog.find_element(:id, 'group_weighting_scheme')
+  keep_trying_until do
+    group_check.click
+    expect(is_checked('#group_weighting_scheme')).to be_truthy
+  end
+  group_weight_input = f("#assignment_group_#{assignment_group.id}_weight")
+  set_value(group_weight_input, "")
+  set_value(group_weight_input, weight_number)
+  fj('.ui-button:contains("Save")').click
+  wait_for_ajaximations
+  expect(@course.reload.group_weighting_scheme).to eq 'percent'
+end
+
+def validate_group_weight_text(assignment_groups, weight_numbers)
+  assignment_groups.each_with_index do |ag, i|
+    heading = fj(".slick-column-name:contains('#{ag.name}') .assignment-points-possible")
+    expect(heading).to include_text("#{weight_numbers[i]}% of grade")
+  end
+end
+
+def validate_group_weight(assignment_group, weight_number)
+  expect(assignment_group.reload.group_weight).to eq weight_number
 end

@@ -1,22 +1,32 @@
 define [
+  'jquery'
   'react'
   'react-router'
   'compiled/react_files/components/SearchResults'
   'compiled/collections/FilesCollection'
-], (React, Router, SearchResults, FilesCollection) ->
+  'compiled/react_files/routes'
+], ($, React, Router, SearchResults, FilesCollection, routes) ->
+
   module 'SearchResults#render',
-  test 'when collection is loaded and empty display no matches found', ->
-    sinon.stub(Router, 'Link').returns('link')
-    sinon.stub($, 'ajax').returns($.Deferred().resolve())
-    props =
-      params: {}
-      query: {}
-      onResolvePath: ->
-      areAllItemsSelected: -> false
-    @searchResults = React.renderComponent(SearchResults(props), $('#fixtures')[0])
+    setup: ->
+    teardown: ->
+      $("#fixtures").empty()
 
-    ok @searchResults.refs.noResultsFound, 'Displays the no results text'
+  # asyncTest 'when collection is loaded and empty display no matches found', ->
+  #   expect(1)
 
-    React.unmountComponentAtNode($('#fixtures')[0])
-    Router.Link.restore()
-    $.ajax.restore()
+  #   container = $('<div>').appendTo("#fixtures")[0]
+  #   renderedRoutes = React.renderComponent(routes, container)
+
+  #   @server = sinon.fakeServer.create()
+  #   @server.respondWith('GET', new RegExp('/api/v1/courses/999/files?search_term=fake_search_term'), '[]')
+
+  #   renderedRoutes.dispatch '/courses/999/files/search?search_term=fake_search_term', =>
+  #     @server.respond()
+
+
+  #     ok $(container).find(':contains(Your search - "fake_search_term" - did not match any files.)').length, 'displays no matches error'
+  #     React.unmountComponentAtNode(container)
+  #     @server.restore()
+  #     start()
+

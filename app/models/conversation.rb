@@ -18,8 +18,6 @@
 
 class Conversation < ActiveRecord::Base
   include SimpleTags
-  include ModelCache
-  cacheable_by :id, :private_hash
 
   has_many :conversation_participants, :dependent => :destroy
   has_many :conversation_messages, :order => "created_at DESC, id DESC", :dependent => :delete_all
@@ -36,12 +34,19 @@ class Conversation < ActiveRecord::Base
   # see also MessageableUser
   def participants(reload = false)
     if !@participants || reload
-      Conversation.preload_participants([self])
+      @participants = Rails.cache.fetch([self, 'participants'].cache_key, expires_in: 1.day) do
+        Conversation.preload_participants([self])
+        @participants
+      end
     end
     @participants
   end
 
   attr_accessible
+
+  def delete_participant_cache
+    Rails.cache.delete([self, 'participants'].cache_key)
+  end
 
   def reload(options = nil)
     @current_context_strings = {}
@@ -86,10 +91,10 @@ class Conversation < ActiveRecord::Base
     private_hash = private ? private_hash_for(users) : nil
     transaction do
       if private
-        conversation = users.first.all_conversations.find_by_private_hash(private_hash).try(:conversation)
+        conversation = users.first.all_conversations.where(private_hash: private_hash).first.try(:conversation)
         # for compatibility during migration, before ConversationParticipant has finished populating
         if Setting.get('populate_conversation_participants_private_hash_complete', '0') == '0'
-          conversation ||= Conversation.find_by_private_hash(private_hash)
+          conversation ||= Conversation.where(private_hash: private_hash).first
         end
       end
       unless conversation
@@ -120,11 +125,16 @@ class Conversation < ActiveRecord::Base
     end
   end
 
+  # conversations with more recipients than this should force individual messages
+  def self.max_group_conversation_size
+    Setting.get("max_group_conversation_size", 100).to_i
+  end
+
   def add_participants(current_user, users, options={})
     self.shard.activate do
       user_ids = users.map(&:id).uniq
       raise "can't add participants to a private conversation" if private?
-      transaction do
+      message = transaction do
         lock!
         user_ids -= conversation_participants.map(&:user_id)
         next if user_ids.empty?
@@ -175,6 +185,8 @@ class Conversation < ActiveRecord::Base
           add_event_message(current_user, {:event_type => :users_added, :user_ids => user_ids}, options)
         end
       end
+      delete_participant_cache
+      message
     end
   end
 
@@ -297,7 +309,10 @@ class Conversation < ActiveRecord::Base
   end
 
   def preload_users_and_context_codes
-    users = conversation_participants.map { |cp| User.send(:instantiate, 'id' => cp.user_id ) }
+    users = User.select([:id, :updated_at]).where(:id => conversation_participants.map(&:user_id)).map do |u|
+      u = User.send(:instantiate, 'id' => u.id, 'updated_at' => u.updated_at) if u.shard != Shard.current
+      u
+    end
     User.preload_conversation_context_codes(users)
     users = users.index_by(&:id)
   end
@@ -316,10 +331,10 @@ class Conversation < ActiveRecord::Base
   # * <tt>:tags</tt> - Array of tags for the message data.
   def add_message_to_participants(message, options = {})
     unless options[:new_message]
-      skip_users = message.conversation_message_participants.active.select(:user_id).all
+      skip_users = message.conversation_message_participants.active.select(:user_id).to_a
     end
 
-    self.conversation_participants.with_each_shard do |cps|
+    self.conversation_participants.shard(self).activate do |cps|
       cps.update_all(:root_account_ids => options[:root_account_ids]) if options[:root_account_ids].present?
 
       cps = cps.visible if options[:only_existing]
@@ -431,7 +446,7 @@ class Conversation < ActiveRecord::Base
 
   def update_participants(message, options = {})
     updated = false
-    self.conversation_participants.with_each_shard do |conversation_participants|
+    self.conversation_participants.shard(self).activate do |conversation_participants|
       conversation_participants = conversation_participants.where(:user_id =>
         (options[:only_users]).map(&:id)) if options[:only_users]
 
@@ -468,7 +483,7 @@ class Conversation < ActiveRecord::Base
   end
 
   def subscribed_participants
-    ConversationParticipant.send(:preload_associations, conversation_participants, :user) unless ModelCache[:users]
+    ActiveRecord::Associations::Preloader.new(conversation_participants, :user).run unless ModelCache[:users]
     conversation_participants.select(&:subscribed?).map(&:user).compact
   end
 
@@ -491,7 +506,7 @@ class Conversation < ActiveRecord::Base
     return unless tags.empty?
     transaction do
       lock!
-      cps = conversation_participants(:include => :user).all
+      cps = conversation_participants(:include => :user).to_a
       update_attribute :tags, current_context_strings
       cps.each do |cp|
         next unless cp.user
@@ -512,8 +527,8 @@ class Conversation < ActiveRecord::Base
       Shard.birth.activate { self.conversation_participants.reload.map(&:user_id) } )
     return unless private_hash_changed?
     existing = self.shard.activate do
-      ConversationParticipant.send(:with_exclusive_scope) do
-        ConversationParticipant.find_by_private_hash(private_hash).try(:conversation)
+      ConversationParticipant.unscoped do
+        ConversationParticipant.where(private_hash: private_hash).first.try(:conversation)
       end
     end
     if existing
@@ -694,7 +709,8 @@ class Conversation < ActiveRecord::Base
     shard.activate do
       conversation_message_participants.scoped.delete_all
     end
-    conversation_participants.with_each_shard { |scope| scope.scoped.delete_all; nil }
+    conversation_participants.shard(self).delete_all
+    delete_participant_cache
   end
 
   protected

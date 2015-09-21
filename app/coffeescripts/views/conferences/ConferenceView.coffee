@@ -4,6 +4,7 @@ define [
   'Backbone'
   'jst/conferences/newConference'
   'jquery.google-analytics'
+  'compiled/jquery.rails_flash_notifications'
 ], (I18n, $, {View}, template) ->
 
   class ConferenceView extends View
@@ -25,10 +26,25 @@ define [
       super
       @model.on('change', @render)
 
+    edit: (e) ->
+      # refocus if edit not finalized
+      @$el.find('.al-trigger').focus()
+
     delete: (e) ->
       e.preventDefault()
-      return if !confirm I18n.t('confirm.delete', "Are you sure you want to delete this conference?")
-      @model.destroy()
+      if !confirm I18n.t('confirm.delete', "Are you sure you want to delete this conference?")
+        $(e.currentTarget).parents('.inline-block').find('.al-trigger').focus()
+      else
+        currentCog = $(e.currentTarget).parents('.inline-block').find('.al-trigger')[0]
+        allCogs = $('#content .al-trigger').toArray()
+        # Find the preceeding cog
+        curIndex = allCogs.indexOf(currentCog)
+        if (curIndex > 0)
+          allCogs[curIndex - 1].focus()
+        else
+          $('.new-conference-btn').focus()
+        @model.destroy success: =>
+          $.screenReaderFlashMessage(I18n.t('Conference was deleted'))
 
     close: (e) ->
       e.preventDefault()

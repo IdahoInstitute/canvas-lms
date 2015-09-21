@@ -32,6 +32,7 @@ require [
   $el = $ '#outcomes'
   $el.html browserTemplate
     canManageOutcomes: ENV.PERMISSIONS.manage_outcomes
+    canManageRubrics: ENV.PERMISSIONS.manage_rubrics
     contextUrlRoot: ENV.CONTEXT_URL_ROOT
 
   toolbar = new ToolbarView
@@ -62,6 +63,8 @@ require [
   content.on 'deleteSuccess', ->
     model = sidebar.$el.find('.outcome-group.selected:last').data('view')?.model
     content.show(model)
+  content.on 'move', (model, newGroup) ->
+    sidebar.moveItem(model, newGroup)
 
   app =
     toolbar: toolbar

@@ -55,6 +55,11 @@ nb:
   locales:
     nb: Norwegian (Bokmål)
   qualified_locale: nb-NO
+ko:
+  locales:
+    ko: 한국말 (crowd-sourced)
+  qualified_locale: ko-KR
+  crowdsourced: true
 en-GB:
   locales:
     en-GB: English (United Kingdom)
@@ -73,3 +78,16 @@ fa-IR:
     fa-IR: فارسی (crowd-sourced)
   qualified_locale: fa-IR
   crowdsourced: true
+da:
+  locales:
+    da: Dansk
+  qualified_locale: da-DK
+hy:
+  locales:
+    hy: Հայերեն (crowd-sourced)
+  qualified_locale: hy-AM
+  crowdsourced: true
+sv:
+  locales:
+    sv: Svenska
+  qualified_locale: sv-SE

@@ -60,9 +60,7 @@ class DelayedNotification < ActiveRecord::Base
     self.do_process unless self.new_record?
     res
   rescue => e
-    ErrorReport.log_exception(:default, e, {
-      :message => "Delayed Notification processing failed",
-    })
+    Canvas::Errors.capture(e, message: "Delayed Notification processing failed")
     logger.error "delayed notification processing failed: #{e.message}\n#{e.backtrace.join "\n"}"
     self.workflow_state = 'errored'
     self.save
@@ -83,7 +81,7 @@ class DelayedNotification < ActiveRecord::Base
     lookups.each do |klass, ids|
       includes = []
       includes = [:user] if klass == CommunicationChannel
-      res += klass.where(:id => ids).includes(includes).all rescue []
+      res += klass.where(:id => ids).includes(includes).to_a rescue []
     end
     @to_list = res.uniq
   end

@@ -16,6 +16,9 @@
 # with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
+require 'atom'
+require 'oauth'
+
 # See Google Docs API documentation here:
 # http://code.google.com/apis/documents/docs/2.0/developers_guide_protocol.html
 module GoogleDocs
@@ -31,7 +34,11 @@ module GoogleDocs
       @access_token ||= OAuth::AccessToken.new(consumer, @oauth_gdocs_access_token, @oauth_gdocs_access_token_secret)
     end
 
-    def get_service_user_info(access_token)
+    def service_type
+      :google_docs
+    end
+
+    def get_service_user_info(access_token=retrieve_access_token)
       doc = create_doc("Temp Doc: #{Time.now.strftime("%d %b %Y, %I:%M %p")}", access_token)
       delete_doc(doc, access_token)
       service_user_id = doc.entry.authors[0].email rescue nil
@@ -53,16 +60,29 @@ module GoogleDocs
     end
 
 
-    def download(document_id)
+    def download(document_id, not_supported=nil)
       access_token = retrieve_access_token
       entry = fetch_list(access_token).entries.map { |e| GoogleDocs::Entry.new(e) }.find { |e| e.document_id == document_id }
       if entry
-        response = access_token.get(entry.download_url)
-        response = access_token.get(response['Location']) if response.is_a?(Net::HTTPFound)
+        response = fetch_entry(access_token, entry)
+
+        # some new google spreadsheets will not download as plain 'xls', so
+        # retry the download as 'xlsx'
+        if response.is_a?(Net::HTTPBadRequest) && entry.extension == 'xls'
+          entry.reset_extension_as_xlsx
+          response = fetch_entry(access_token, entry)
+        end
+
         [response, entry.display_name, entry.extension]
       else
         [nil, nil, nil]
       end
+    end
+
+    def fetch_entry(access_token, entry)
+      response = access_token.get(entry.download_url)
+      response = access_token.get(response['Location']) if response.is_a?(Net::HTTPFound)
+      response
     end
 
     def fetch_list(access_token)
@@ -137,10 +157,8 @@ module GoogleDocs
             self.type = operation_type
           end
 
-          def to_xml(*opts)
-            n = XML::Node.new("batch:operation")
-            n['type'] = type
-            n
+          def to_xml(builder, *_opts)
+            builder['batch'].operation(type: type)
           end
         end
       end
@@ -153,10 +171,8 @@ module GoogleDocs
             self.role = "writer"
           end
 
-          def to_xml(*opts)
-            n = XML::Node.new("gAcl:role")
-            n['value'] = role
-            n
+          def to_xml(builder, *_opts)
+            builder['gAcl'].role(value: role)
           end
         end
 
@@ -168,11 +184,8 @@ module GoogleDocs
             self.value = email
           end
 
-          def to_xml(*opts)
-            n = XML::Node.new("gAcl:scope")
-            n['type'] = type
-            n['value'] = value
-            n
+          def to_xml(builder, *_opts)
+            builder['gAcl'].scope(type: type, value: value)
           end
         end
       end
@@ -198,7 +211,7 @@ module GoogleDocs
       add_extension_namespace :gAcl, 'http://schemas.google.com/acl/2007'
     end
 
-    def create_doc(name, access_token)
+    def create_doc(name, access_token=retrieve_access_token)
       url = "https://docs.google.com/feeds/documents/private/full"
       entry = Atom::Entry.new do |entry|
         entry.title = name
@@ -208,7 +221,7 @@ module GoogleDocs
           category.label = "document"
         end
       end
-      xml = entry.to_xml
+      xml = entry.to_xml.to_s
       begin
         response = access_token.post(url, xml, {'Content-Type' => 'application/atom+xml'})
       rescue => e
@@ -254,7 +267,7 @@ module GoogleDocs
           end
         end
       end
-      response = access_token.post(url, request_feed.to_xml, {'Content-Type' => 'application/atom+xml'})
+      response = access_token.post(url, request_feed.to_xml.to_s, {'Content-Type' => 'application/atom+xml'})
       feed = Atom::Feed.load_feed(response.body)
       res = []
 
@@ -301,8 +314,8 @@ module GoogleDocs
 
       return unless user_added
 
-      response = access_token.post(url, request_feed.to_xml, {'Content-Type' => 'application/atom+xml'})
-      feed = Atom::Feed.load_feed(response.body)
+      post_response = access_token.post(url, request_feed.to_xml.to_s, {'Content-Type' => 'application/atom+xml'})
+      feed = Atom::Feed.load_feed(post_response.body)
       feed.entries.inject([]) do |response, entry|
         user = allowed_users.find do |u|
           u.id == entry['http://schemas.google.com/gdata/batch', 'id'][0].to_i

@@ -35,6 +35,7 @@ Attachment.class_eval do
   def marshal_load(data)
     initialize
     instance_variable_set :@attributes, data[0]
+    instance_variable_set :@attributes_cache, {}
     instance_variable_set :@new_record, data[1]
   end
 end
@@ -81,8 +82,13 @@ def stub_png_data(filename = 'test my file? hai!&.png', data = nil)
 end
 
 def jpeg_data_frd
-  fixture_path = '/test_image.jpg'
+  fixture_path = 'test_image.jpg'
   fixture_file_upload(fixture_path, 'image/jpeg', true)
+end
+
+def one_hundred_megapixels_of_highly_compressed_png_data
+  fixture_path = '100mpx.png'
+  fixture_file_upload(fixture_path, 'image/png', true)
 end
 
 def crocodocable_attachment_model(opts={})
@@ -90,3 +96,23 @@ def crocodocable_attachment_model(opts={})
 end
 
 alias :canvadocable_attachment_model :crocodocable_attachment_model
+
+def attachment_obj_with_context(obj, opts={})
+  @attachment = factory_with_protected_attributes(Attachment, valid_attachment_attributes.merge(opts))
+  @attachment.context = obj
+  @attachment
+end
+
+def attachment_with_context(obj, opts={})
+  attachment_obj_with_context(obj, opts)
+  @attachment.save!
+  @attachment
+end
+
+def create_attachment_for_file_upload_submission!(submission, opts={})
+  submission.attachments.create! opts.merge({
+    :filename => "doc.doc",
+    :display_name => "doc.doc", :user => @user,
+    :uploaded_data => dummy_io
+  })
+end

@@ -51,10 +51,10 @@ describe HtmlTextHelper do
       link = html.css('a').first
       link['href'].should == "http://www.instructure.com/"
 
-      str = th.format_message("click here: http://www.instructure.com/courses/1/wiki/informação").first
+      str = th.format_message("click here: http://www.instructure.com/courses/1/pages/informação").first
       html = Nokogiri::HTML::DocumentFragment.parse(str)
       link = html.css('a').first
-      link['href'].should == "http://www.instructure.com/courses/1/wiki/informa%C3%A7%C3%A3o"
+      link['href'].should == "http://www.instructure.com/courses/1/pages/informa%C3%A7%C3%A3o"
 
       str = th.format_message("click here: http://www.instructure.com/'onclick=alert(document.cookie)//\nnewline").first
       html = Nokogiri::HTML::DocumentFragment.parse(str)
@@ -203,6 +203,16 @@ EOS
     it "should return an empty string if passed a nil value" do
       th.html_to_text(nil).should == ''
     end
+
+    it "just uses the given link if it cannot be parsed" do
+      html_input = '<a href="http://&example.org/link">Link</a>'
+      th.html_to_text(html_input, base_url: "http://example.com").should == "[Link](http://&example.org/link)"
+    end
+
+    it "just uses the img src given if it cannot be parsed" do
+      html_input = '<img src="http://example=.org/image.png" />'
+      th.html_to_text(html_input, base_url: "http://example.com").should == "http://example=.org/image.png"
+    end
   end
 
   describe "simplify html" do
@@ -231,6 +241,20 @@ EOS
       html          = th.html_to_simple_html(original_html, base_url: 'http://example.com')
 
       html.should match(%r{http://example.com/relative/link})
+    end
+  end
+
+  context "banner" do
+    it "should add a banner above and below the text equal to text length" do
+      th.banner('hi', char: '#').should eq "##\nhi\n##"
+    end
+
+    it "should default to '*' if not char is passed" do
+      th.banner('hi').should eq "**\nhi\n**"
+    end
+
+    it "should return the input text if it is nil or empty" do
+      th.banner('').should eq ''
     end
   end
 

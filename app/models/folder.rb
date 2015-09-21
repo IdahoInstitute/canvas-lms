@@ -61,6 +61,14 @@ class Folder < ActiveRecord::Base
   validate :protect_root_folder_name, :if => :name_changed?
   validate :reject_recursive_folder_structures, on: :update
 
+  def file_attachments_visible_to(user)
+    if self.context.grants_right?(user, :manage_files)
+      self.active_file_attachments
+    else
+      self.visible_file_attachments.not_locked
+    end
+  end
+
   def protect_root_folder_name
     if self.parent_folder_id.blank? && self.name != Folder.root_folder_name_for_context(context)
       if self.new_record?
@@ -125,7 +133,7 @@ class Folder < ActiveRecord::Base
     return read_attribute(:full_name) if !reload && read_attribute(:full_name)
     folder = self
     names = [self.name]
-    while folder.parent_folder_id do
+    while folder.parent_folder_id
       folder = Folder.find(folder.parent_folder_id) #folder.parent_folder
       names << folder.name if folder
     end
@@ -144,13 +152,14 @@ class Folder < ActiveRecord::Base
 
   def infer_full_name
     # TODO i18n
-    t :default_folder_name, 'folder'
-    self.name ||= "folder"
+    t :default_folder_name, 'New Folder'
+    self.name = 'New Folder' if self.name.blank?
     self.name = self.name.gsub(/\//, "_")
     folder = self
     @update_sub_folders = false
     self.parent_folder_id = nil if !self.parent_folder || self.parent_folder.context != self.context || self.parent_folder_id == self.id
     self.context = self.parent_folder.context if self.parent_folder
+    self.prevent_duplicate_name
     self.full_name = self.full_name(true)
     if self.parent_folder_id_changed? || !self.parent_folder_id || self.full_name_changed? || self.name_changed?
       @update_sub_folders = true
@@ -158,6 +167,34 @@ class Folder < ActiveRecord::Base
     @folder_id = self.id
   end
   protected :infer_full_name
+
+  def prevent_duplicate_name
+    return unless self.parent_folder
+
+    existing_folders = self.parent_folder.active_sub_folders.where('name ~* ? AND id <> ?', "^#{Regexp.quote(self.name)}(\\s\\d+)?$", self.id.to_i).pluck(:name)
+
+    return unless existing_folders.include?(self.name)
+
+    iterations, usable_iterator, candidate = [], nil, 2
+
+    existing_folders.each do |folder_name|
+      iterator = folder_name.split.last.to_i
+      iterations << iterator if iterator > 1
+    end
+
+    iterations.sort.each do |i|
+      if candidate < i
+        usable_iterator = candidate
+        break
+      else
+        candidate = i + 1
+      end
+    end
+
+    usable_iterator ||= existing_folders.size + 1
+    self.name = "#{self.name} #{usable_iterator}"
+  end
+  protected :prevent_duplicate_name
 
   def update_sub_folders
     return unless @update_sub_folders
@@ -239,11 +276,11 @@ class Folder < ActiveRecord::Base
     end
     dup.context = context
     if options[:include_subcontent] != false
-      dup.save_without_broadcasting!
+      dup.save!
       self.subcontent.each do |item|
         if options[:everything] || options[:all_files] || options[item.asset_string.to_sym]
           if item.is_a?(Attachment)
-            file = item.clone_for(context)
+            file = item.clone_for(context, nil, options.slice(:overwrite, :force_copy))
             file.folder_id = dup.id
             file.save_without_broadcasting!
           elsif item.is_a?(Folder)
@@ -289,6 +326,13 @@ class Folder < ActiveRecord::Base
     end
 
     root_folders
+  end
+
+  def self.is_locked?(folder_id)
+    RequestCache.cache('folder_is_locked', folder_id) do
+      folder = Folder.where(:id => folder_id).first
+      folder && folder.locked?
+    end
   end
 
   def attachments
@@ -416,6 +460,9 @@ class Folder < ActiveRecord::Base
     given { |user, session| self.visible? && self.context.grants_right?(user, session, :read) }#students.include?(user) }
     can :read
 
+    given { |user, session| self.context.grants_right?(user, session, :read_as_admin) }
+    can :read_contents
+
     given { |user, session| self.visible? && !self.locked? && self.context.grants_right?(user, session, :read) && !(self.context.is_a?(Course) && self.context.tab_hidden?(Course::TAB_FILES)) }#students.include?(user) }
     can :read_contents
 
@@ -424,5 +471,38 @@ class Folder < ActiveRecord::Base
 
     given {|user, session| self.protected? && !self.locked? && self.context.grants_right?(user, session, :read) && self.context.users.include?(user) }
     can :read and can :read_contents
+
+    given { |user, session| self.context.grants_right?(user, session, :manage_files) }
+    can :manage_files
+
+    given { |user, session| self.context.grants_right?(user, session, :read_as_admin) }
+    can :read_as_admin
   end
+
+  # find all unlocked/visible folders that can be reached by following unlocked/visible folders from the root
+  def self.all_visible_folder_ids(context)
+    folder_tree = context.active_folders.not_hidden.not_locked.select([:id, :parent_folder_id]).inject({}) do |folders, item|
+      folders[item.parent_folder_id] ||= []
+      folders[item.parent_folder_id] << item.id
+      folders
+    end
+    visible_ids = []
+    dir_contents = Folder.root_folders(context).map(&:id)
+    find_visible_folders(visible_ids, folder_tree, dir_contents)
+    visible_ids
+  end
+
+  def self.from_context_or_id(context, id)
+    root_folders(context).first || where(id: id).first || (raise ActiveRecord::RecordNotFound)
+  end
+
+  def self.find_visible_folders(visible_ids, folder_tree, dir_contents)
+    visible_ids.concat dir_contents
+    dir_contents.each do |child_folder_id|
+      next unless folder_tree[child_folder_id].present?
+      find_visible_folders(visible_ids, folder_tree, folder_tree[child_folder_id])
+    end
+    nil
+  end
+  private_class_method :find_visible_folders
 end

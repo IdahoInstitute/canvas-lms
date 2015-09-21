@@ -173,9 +173,9 @@ class ProfileController < ApplicationController
     known_user = @user_data[:common_contexts].present?
     if @user_data[:known_user] # if you can message them, you can see the profile
       add_crumb(t('crumbs.settings_frd', "%{user}'s settings", :user => @user.short_name), user_profile_path(@user))
-      return render :action => :show
+      render
     else
-      return render :action => :unauthorized
+      render :unauthorized
     end
   end
 
@@ -188,10 +188,8 @@ class ProfileController < ApplicationController
   # @returns Profile
   def settings
     if api_request?
-      # allow querying this basic profile data for the current user, or any
-      # user the current user has view_statistics access to
       @user = api_find(User, params[:user_id])
-      return unless @user == @current_user || authorized_action(@user, @current_user, :view_statistics)
+      return unless authorized_action(@user, @current_user, :read_profile)
     else
       @user = @current_user
       @user.dismiss_bouncing_channel_message!
@@ -210,7 +208,7 @@ class ProfileController < ApplicationController
     respond_to do |format|
       format.html do
         add_crumb(t(:crumb, "%{user}'s settings", :user => @user.short_name), settings_profile_path )
-        render :action => "profile"
+        render :profile
       end
       format.json do
         render :json => user_profile_json(@user.profile, @current_user, session, params[:include])
@@ -441,6 +439,12 @@ class ProfileController < ApplicationController
   private :require_user_for_private_profile
 
   def observees
+    if session[:parent_registration] && session[:parent_registration][:logged_out]
+      session.delete(:parent_registration)
+    end
+    if @domain_root_account.parent_registration?
+      js_env(AUTH_TYPE: @domain_root_account.parent_auth_type)
+    end
     @user ||= @current_user
     @active_tab = 'observees'
     @context = @user.profile if @user == @current_user

@@ -36,7 +36,7 @@ class ContentMigration < ActiveRecord::Base
   DATE_FORMAT = "%m/%d/%Y"
 
   attr_accessible :context, :migration_settings, :user, :source_course, :copy_options, :migration_type, :initiated_source
-  attr_accessor :imported_migration_items, :outcome_to_id_map
+  attr_accessor :imported_migration_items, :outcome_to_id_map, :attachment_path_id_lookup, :attachment_path_id_lookup_lower
 
   workflow do
     state :created
@@ -198,8 +198,8 @@ class ContentMigration < ActiveRecord::Base
     if opts[:error_report_id]
       mi.error_report_id = opts[:error_report_id]
     elsif opts[:exception]
-      er = ErrorReport.log_exception(:content_migration, opts[:exception])
-      mi.error_report_id = er.id
+      er = Canvas::Errors.capture_exception(:content_migration, opts[:exception])[:error_report]
+      mi.error_report_id = er
     end
     mi.error_message = opts[:error_message]
     mi.fix_issue_html_url = opts[:fix_issue_html_url]
@@ -239,7 +239,7 @@ class ContentMigration < ActiveRecord::Base
 
   def add_import_warning(item_type, item_name, warning)
     item_name = CanvasTextHelper.truncate_text(item_name || "", :max_length => 150)
-    add_warning(t('errors.import_error', "Import Error: ") + "#{item_type} - \"#{item_name}\"", warning)
+    add_warning(t('errors.import_error', "Import Error:") + " #{item_type} - \"#{item_name}\"", warning)
   end
 
   def fail_with_error!(exception_or_info)
@@ -253,6 +253,7 @@ class ContentMigration < ActiveRecord::Base
     self.workflow_state = :failed
     job_progress.fail if job_progress && !skip_job_progress
     save
+    resolve_content_links! # don't leave placeholders
   end
 
   # deprecated warning format
@@ -318,20 +319,16 @@ class ContentMigration < ActiveRecord::Base
       else
         # find worker and queue for conversion
         begin
-          if Canvas::Migration::Worker.const_defined?(plugin.settings['worker'])
-            self.workflow_state = :exporting
-            worker_class = Canvas::Migration::Worker.const_get(plugin.settings['worker'])
-            job = Delayed::Job.enqueue(worker_class.new(self.id), queue_opts)
-            self.save
-            job
-          else
-            raise NameError
-          end
+          worker_class = Canvas::Migration::Worker.const_get(plugin.settings['worker'])
+          self.workflow_state = :exporting
+          job = Delayed::Job.enqueue(worker_class.new(self.id), queue_opts)
+          self.save
+          job
         rescue NameError
           self.workflow_state = 'failed'
           message = "The migration plugin #{migration_type} doesn't have a worker."
           migration_settings[:last_error] = message
-          ErrorReport.log_exception(:content_migration, $!)
+          Canvas::Errors.capture_exception(:content_migration, $ERROR_INFO)
           logger.error message
           self.save
         end
@@ -380,11 +377,7 @@ class ContentMigration < ActiveRecord::Base
   def check_quiz_id_prepender
     return unless self.context.respond_to?(:assessment_questions)
     if !migration_settings[:id_prepender] && (!migration_settings[:overwrite_questions] || !migration_settings[:overwrite_quizzes])
-      # only prepend an id if the course already has some migrated questions/quizzes
-      if self.context.assessment_questions.where('assessment_questions.migration_id IS NOT NULL').exists? ||
-         (self.context.respond_to?(:quizzes) && self.context.quizzes.where('quizzes.migration_id IS NOT NULL').exists?)
-        migration_settings[:id_prepender] = self.id
-      end
+      migration_settings[:id_prepender] = self.id
     end
   end
 
@@ -395,7 +388,7 @@ class ContentMigration < ActiveRecord::Base
   def import_everything?
     return true unless migration_settings[:migration_ids_to_import] && migration_settings[:migration_ids_to_import][:copy] && migration_settings[:migration_ids_to_import][:copy].length > 0
     return true if is_set?(to_import(:everything))
-    return true if copy_options && copy_options[:everything]
+    return true if copy_options && is_set?(copy_options[:everything])
     false
   end
 
@@ -452,8 +445,8 @@ class ContentMigration < ActiveRecord::Base
       end
     rescue => e
       self.workflow_state = :failed
-      er = ErrorReport.log_exception(:content_migration, e)
-      migration_settings[:last_error] = "ErrorReport:#{er.id}"
+      er_id = Canvas::Errors.capture_exception(:content_migration, e)[:error_report]
+      migration_settings[:last_error] = "ErrorReport:#{er_id}"
       logger.error e
       self.save
       raise e
@@ -596,27 +589,27 @@ class ContentMigration < ActiveRecord::Base
     ContentMigration.where(:id => self).update_all(:progress=>val)
   end
 
-  def add_missing_content_links(item)
-    @missing_content_links ||= {}
-    item[:field] ||= :text
-    key = "#{item[:class]}_#{item[:id]}_#{item[:field]}"
-    if item[:missing_links].present?
-      @missing_content_links[key] = item
-    else
-      @missing_content_links.delete(key)
-    end
+  def html_converter
+    @html_converter ||= ImportedHtmlConverter.new(self)
   end
 
-  def add_warnings_for_missing_content_links
-    return unless @missing_content_links
-    @missing_content_links.each_value do |item|
-      if item[:missing_links].any?
-        add_warning(t(:missing_content_links_title, "Missing links found in imported content") + " - #{item[:class]} #{item[:field]}",
-          {:error_message => "#{item[:class]} #{item[:field]} - " + t(:missing_content_links_message,
-            "The following references could not be resolved: ") + " " + item[:missing_links].join(', '),
-            :fix_issue_html_url => item[:url]})
-      end
-    end
+  def convert_html(*args)
+    html_converter.convert(*args)
+  end
+
+  def convert_text(*args)
+    html_converter.convert_text(*args)
+  end
+
+  def resolve_content_links!
+    html_converter.resolve_content_links!
+  end
+
+  def add_warning_for_missing_content_links(type, field, missing_links, fix_issue_url)
+    add_warning(t(:missing_content_links_title, "Missing links found in imported content") + " - #{type} #{field}",
+      {:error_message => "#{type} #{field} - " + t(:missing_content_links_message,
+        "The following references could not be resolved:") + " " + missing_links.join(', '),
+        :fix_issue_html_url => fix_issue_url})
   end
 
   UPLOAD_TIMEOUT = 1.hour
@@ -708,17 +701,31 @@ class ContentMigration < ActiveRecord::Base
 
   def imported_migration_items
     @imported_migration_items_hash ||= {}
-    @imported_migration_items_hash.values.flatten
+    @imported_migration_items_hash.values.map(&:values).flatten
+  end
+
+  def imported_migration_items_hash(klass)
+    @imported_migration_items_hash ||= {}
+    @imported_migration_items_hash[klass.name] ||= {}
   end
 
   def imported_migration_items_by_class(klass)
-    @imported_migration_items_hash ||= {}
-    @imported_migration_items_hash[klass.name] ||= []
+    imported_migration_items_hash(klass).values
+  end
+
+  def find_imported_migration_item(klass, migration_id)
+    imported_migration_items_hash(klass)[migration_id]
   end
 
   def add_imported_item(item)
-    arr = imported_migration_items_by_class(item.class)
-    arr << item unless arr.include?(item)
+    imported_migration_items_hash(item.class)[item.migration_id] = item
+  end
+
+  def add_attachment_path(path, migration_id)
+    self.attachment_path_id_lookup ||= {}
+    self.attachment_path_id_lookup_lower ||= {}
+    self.attachment_path_id_lookup[path] = migration_id
+    self.attachment_path_id_lookup_lower[path.downcase] = migration_id
   end
 
   def add_external_tool_translation(migration_id, target_tool, custom_fields)

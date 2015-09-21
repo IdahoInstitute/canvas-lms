@@ -27,23 +27,26 @@ describe ContextModuleProgression do
     @course.enroll_student(@user)
   end
 
+  def setup_modules
+    @assignment = @course.assignments.create!(:title => "some assignment")
+    @tag = @module.add_item({:id => @assignment.id, :type => 'assignment'})
+    @module.completion_requirements = {@tag.id => {:type => 'must_view'}}
+    @module.workflow_state = 'unpublished'
+    @module.save!
+
+    @module2 = @course.context_modules.create!(:name => "another module")
+    @module2.publish
+    @module2.prerequisites = "module_#{@module.id}"
+    @module2.save!
+
+    @module3 = @course.context_modules.create!(:name => "another module again")
+    @module3.publish
+    @module3.save!
+  end
+
   context "prerequisites_satisfied?" do
     before do
-
-      @assignment = @course.assignments.create!(:title => "some assignment")
-      @tag = @module.add_item({:id => @assignment.id, :type => 'assignment'})
-      @module.completion_requirements = {@tag.id => {:type => 'must_view'}}
-      @module.workflow_state = 'unpublished'
-      @module.save!
-
-      @module2 = @course.context_modules.create!(:name => "another module")
-      @module2.publish
-      @module2.prerequisites = "module_#{@module.id}"
-      @module2.save!
-
-      @module3 = @course.context_modules.create!(:name => "another module again")
-      @module3.publish
-      @module3.save!
+      setup_modules
     end
 
     it "should correctly ignore already-calculated context_module_prerequisites" do
@@ -54,21 +57,21 @@ describe ContextModuleProgression do
       mp2.workflow_state = 'locked'
       mp2.save!
 
-      ContextModuleProgression.prerequisites_satisfied?(@user, @module2).should == true
+      expect(ContextModuleProgression.prerequisites_satisfied?(@user, @module2)).to eq true
     end
 
     it "should be satisfied if no prereqs" do
-      ContextModuleProgression.prerequisites_satisfied?(@user, @module3).should == true
+      expect(ContextModuleProgression.prerequisites_satisfied?(@user, @module3)).to eq true
     end
 
     it "should be satisfied if prereq is unpublished" do
-      ContextModuleProgression.prerequisites_satisfied?(@user, @module2).should == true
+      expect(ContextModuleProgression.prerequisites_satisfied?(@user, @module2)).to eq true
     end
 
     it "should be satisfied if prereq's prereq is unpublished" do
       @module3.prerequisites = "module_#{@module2.id}"
       @module3.save!
-      ContextModuleProgression.prerequisites_satisfied?(@user, @module3).should == true
+      expect(ContextModuleProgression.prerequisites_satisfied?(@user, @module3)).to eq true
     end
 
     it "should be satisfied if dependent on both a published and unpublished module" do
@@ -76,9 +79,9 @@ describe ContextModuleProgression do
       @module3.prerequisites = [{:type=>"context_module", :id=>@module.id, :name=>@module.name}, {:type=>"context_module", :id=>@module2.id, :name=>@module2.name}]
       @module3.save!
       @module3.reload
-      @module3.prerequisites.count.should == 2
+      expect(@module3.prerequisites.count).to eq 2
 
-      ContextModuleProgression.prerequisites_satisfied?(@user, @module3).should == true
+      expect(ContextModuleProgression.prerequisites_satisfied?(@user, @module3)).to eq true
     end
 
     it "should skip incorrect prereq hashes" do
@@ -86,14 +89,14 @@ describe ContextModuleProgression do
                                 {:type=>"not_context_module", :id=>@module2.id, :name=>@module2.name}]
       @module3.save!
 
-      @module3.prerequisites.count.should == 0
+      expect(@module3.prerequisites.count).to eq 0
     end
 
     it "should update when publishing or unpublishing" do
       @module.publish
-      ContextModuleProgression.prerequisites_satisfied?(@user, @module2).should == false
+      expect(ContextModuleProgression.prerequisites_satisfied?(@user, @module2)).to eq false
       @module.unpublish
-      ContextModuleProgression.prerequisites_satisfied?(@user, @module2).should == true
+      expect(ContextModuleProgression.prerequisites_satisfied?(@user, @module2)).to eq true
     end
   end
 
@@ -115,14 +118,14 @@ describe ContextModuleProgression do
       it 'when current' do
         module_progression.evaluate
 
-        module_progression.workflow_state.should == 'bogus'
+        expect(module_progression.workflow_state).to eq 'bogus'
       end
 
       it 'when current and the module has not yet unlocked' do
         @module.unlock_at = 10.minutes.from_now
         module_progression.evaluate
 
-        module_progression.workflow_state.should == 'bogus'
+        expect(module_progression.workflow_state).to eq 'bogus'
       end
     end
 
@@ -131,28 +134,28 @@ describe ContextModuleProgression do
         module_progression.current = false
         module_progression.evaluate
 
-        module_progression.workflow_state.should_not == 'bogus'
+        expect(module_progression.workflow_state).not_to eq 'bogus'
       end
 
       it 'when current, but the evaluated_at stamp is missing' do
         module_progression.evaluated_at = nil
         module_progression.evaluate
 
-        module_progression.workflow_state.should_not == 'bogus'
+        expect(module_progression.workflow_state).not_to eq 'bogus'
       end
 
       it 'when current, but the module has since unlocked' do
         @module.unlock_at = 1.minute.ago
         module_progression.evaluate
 
-        module_progression.workflow_state.should_not == 'bogus'
+        expect(module_progression.workflow_state).not_to eq 'bogus'
       end
 
       it 'when current, but the module has been updated' do
         module_progression.evaluated_at = 1.minute.ago
         module_progression.evaluate
 
-        module_progression.workflow_state.should_not == 'bogus'
+        expect(module_progression.workflow_state).not_to eq 'bogus'
       end
     end
   end
@@ -187,7 +190,47 @@ describe ContextModuleProgression do
 
       new_progression = nil
       expect { new_progression = progression.evaluate! }.to_not raise_error
-      new_progression.workflow_state.should == 'locked'
+      expect(new_progression.workflow_state).to eq 'locked'
+    end
+  end
+
+  it "should not invalidate progressions if a prerequisite changes, until manually relocked" do
+    @module.unpublish!
+    setup_modules
+    @module3.prerequisites = "module_#{@module2.id}"
+    @module3.save!
+    progression2 = @module2.evaluate_for(@user)
+    progression3 = @module3.evaluate_for(@user)
+
+    @module.reload
+    @module.publish!
+    progression2.reload
+    progression3.reload
+    expect(progression2).to be_completed
+    expect(progression3).to be_completed
+
+    @module.relock_progressions
+
+    progression2.reload
+    progression3.reload
+    expect(progression2).to be_locked
+    expect(progression3).to be_locked
+  end
+
+  describe "#uncomplete_requirement" do
+    it "should uncomplete the requirement" do
+      setup_modules
+      progression = @tag.context_module_action(@user, :read)
+      progression.uncomplete_requirement(@tag.id)
+      expect(progression.requirements_met.length).to be(0)
+
+    end
+
+    it "should not change anything when given an ID that does not exist" do
+      setup_modules
+      progression = @tag.context_module_action(@user, :read)
+      progression.uncomplete_requirement(-1)
+      expect(progression.requirements_met.length).to be(1)
     end
   end
 end
